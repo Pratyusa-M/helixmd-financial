@@ -128,27 +128,35 @@ const Settings = () => {
     fetchConnectedAccounts();
   }, [user, toast]);
 
-  // Fetch Plaid Link token using Supabase Edge Function
-  const fetchPlaidLinkToken = useCallback(async () => {
+  // Fetch Plaid Link token using Supabase Edge Function with retry
+  const fetchPlaidLinkToken = useCallback(async (retryCount = 0) => {
+    const maxRetries = 3;
     try {
       console.log("Fetching Plaid Link Token...");
       const { data, error } = await supabase.functions.invoke('create_link_token', {
-        body: { user_id: user?.id }, // Pass user_id or other required params
+        body: { user_id: user?.id }, // Ensure user_id is valid
       });
 
       if (error) {
-        console.error("Error fetching Plaid Link Token:", error);
+        console.error("Error fetching Plaid Link Token:", error.message);
         throw error;
       }
 
       console.log("Plaid Link Token fetched:", data.link_token);
       setPlaidLinkToken(data.link_token);
     } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to initialize Plaid Link. Check console for details.",
-        variant: "destructive",
-      });
+      console.error("Fetch error details:", error);
+      if (retryCount < maxRetries) {
+        console.log(`Retrying (${retryCount + 1}/${maxRetries})...`);
+        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1))); // Exponential backoff
+        await fetchPlaidLinkToken(retryCount + 1);
+      } else {
+        toast({
+          title: "Error",
+          description: "Failed to initialize Plaid Link after multiple attempts. Check Supabase Edge Function setup or contact support.",
+          variant: "destructive",
+        });
+      }
     }
   }, [toast, user?.id]);
 
