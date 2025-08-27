@@ -19,7 +19,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLocation } from "react-router-dom";
 import { TaxSettingsTab } from "@/components/TaxSettingsTab";
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from "@supabase/supabase-js";
 
 // Extend the Window interface to include Plaid
 declare global {
@@ -28,7 +28,6 @@ declare global {
   }
 }
 
-// Category and subcategory mappings
 const categoryMappings = {
   business_income: {
     categories: ['OHIP', 'Fee for Service/Locum', 'Honoraria', 'AFP Funding', 'ER/On-Call Coverage', 'Recruiting Bonus', 'Stipend', 'CMPA Reimbursements', 'Other'],
@@ -53,10 +52,6 @@ const categoryMappings = {
     }
   }
 };
-
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
 
 const Settings = () => {
   const { toast } = useToast();
@@ -90,10 +85,10 @@ const Settings = () => {
   const [plaidLinkToken, setPlaidLinkToken] = useState<string | null>(null);
   const [connectedAccounts, setConnectedAccounts] = useState<any[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const [supabase, setSupabase] = useState<any>(null); // State to hold Supabase client
 
-  // Get the active tab from URL hash
   const getActiveTab = () => {
-    const hash = location.hash.slice(1); // Remove the #
+    const hash = location.hash.slice(1);
     if (hash === 'automations') return 'automations';
     if (hash === 'tax-settings') return 'tax-settings';
     return 'profile';
@@ -101,10 +96,27 @@ const Settings = () => {
 
   const [activeTab, setActiveTab] = useState(getActiveTab());
 
-  // Fetch connected accounts from Supabase
+  // Initialize Supabase client when component mounts
+  useEffect(() => {
+    const initSupabase = () => {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      if (supabaseUrl && supabaseKey) {
+        setSupabase(createClient(supabaseUrl, supabaseKey));
+      } else {
+        toast({
+          title: "Error",
+          description: "Supabase configuration is missing. Check environment variables.",
+          variant: "destructive",
+        });
+      }
+    };
+    initSupabase();
+  }, [toast]);
+
   useEffect(() => {
     const fetchConnectedAccounts = async () => {
-      if (!user) return;
+      if (!user || !supabase) return;
       
       setIsLoadingAccounts(true);
       const { data, error } = await supabase
@@ -126,29 +138,22 @@ const Settings = () => {
     };
 
     fetchConnectedAccounts();
-  }, [user, toast]);
+  }, [user, toast, supabase]);
 
-  // Fetch Plaid Link token using Supabase Edge Function with retry
   const fetchPlaidLinkToken = useCallback(async (retryCount = 0) => {
     const maxRetries = 3;
     try {
-      console.log("Fetching Plaid Link Token...");
+      if (!supabase) throw new Error("Supabase client not initialized");
       const { data, error } = await supabase.functions.invoke('create_link_token', {
-        body: { user_id: user?.id }, // Ensure user_id is valid
+        body: { user_id: user?.id },
       });
 
-      if (error) {
-        console.error("Error fetching Plaid Link Token:", error.message);
-        throw error;
-      }
+      if (error) throw error;
 
-      console.log("Plaid Link Token fetched:", data.link_token);
       setPlaidLinkToken(data.link_token);
     } catch (error) {
-      console.error("Fetch error details:", error);
       if (retryCount < maxRetries) {
-        console.log(`Retrying (${retryCount + 1}/${maxRetries})...`);
-        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1))); // Exponential backoff
+        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
         await fetchPlaidLinkToken(retryCount + 1);
       } else {
         toast({
@@ -158,40 +163,22 @@ const Settings = () => {
         });
       }
     }
-  }, [toast, user?.id]);
+  }, [toast, user?.id, supabase]);
 
-  // Initialize Plaid Link
   const initializePlaidLink = useCallback(() => {
-    if (!plaidLinkToken) {
-      console.log("Plaid Link Token is missing.");
+    if (!plaidLinkToken || !window.Plaid) {
       toast({
         title: "Error",
-        description: "Plaid Link token not available. Please try again.",
+        description: "Plaid Link token or library not available. Please try again.",
         variant: "destructive",
       });
       return;
     }
 
-    if (!window.Plaid) {
-      console.log("Plaid library not loaded.");
-      toast({
-        title: "Error",
-        description: "Plaid library not loaded. Check CSP and script inclusion.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    console.log("Initializing Plaid Link with token:", plaidLinkToken);
-    // @ts-ignore
     const plaid = window.Plaid.create({
       token: plaidLinkToken,
-      onSuccess: (publicToken: string, metadata: any) => {
-        console.log("Plaid onSuccess:", publicToken, metadata);
-        handlePlaidSuccess(publicToken, metadata);
-      },
+      onSuccess: (publicToken: string, metadata: any) => handlePlaidSuccess(publicToken, metadata),
       onExit: (err: any, metadata: any) => {
-        console.log("Plaid onExit:", err, metadata);
         if (err) {
           toast({
             title: "Error",
@@ -201,38 +188,28 @@ const Settings = () => {
         }
         setIsPlaidDialogOpen(false);
       },
-      onEvent: (eventName: string, metadata: any) => {
-        console.log("Plaid Link Event:", eventName, metadata);
-      },
+      onEvent: (eventName: string, metadata: any) => console.log("Plaid Link Event:", eventName, metadata),
     });
 
     plaid.open();
   }, [plaidLinkToken, toast]);
 
-  // Handle Plaid success callback using Supabase Edge Function
   const handlePlaidSuccess = async (publicToken: string, metadata: any) => {
     try {
-      console.log("Handling Plaid Success:", publicToken, metadata);
+      if (!supabase) throw new Error("Supabase client not initialized");
       const { data, error } = await supabase.functions.invoke('exchange_public_token', {
         body: { public_token: publicToken, metadata },
       });
 
-      if (error) {
-        console.error("Error exchanging public token:", error);
-        throw error;
-      }
+      if (error) throw error;
 
-      // Refresh connected accounts
       const { data: accounts, error: fetchError } = await supabase
         .from('connected_accounts')
         .select('*')
         .eq('user_id', user?.id)
         .order('created_at', { ascending: false });
 
-      if (fetchError) {
-        console.error("Error fetching accounts:", fetchError);
-        throw fetchError;
-      }
+      if (fetchError) throw fetchError;
 
       setConnectedAccounts(accounts || []);
 
@@ -251,78 +228,45 @@ const Settings = () => {
     }
   };
 
-  // Load Plaid script dynamically when dialog opens
   useEffect(() => {
     if (isPlaidDialogOpen) {
       if (window.Plaid) {
-        console.log("Plaid library already loaded.");
         fetchPlaidLinkToken();
       } else {
-        console.log("Loading Plaid library dynamically...");
         const script = document.createElement("script");
         script.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
         script.async = true;
-        script.onload = () => {
-          console.log("Plaid script loaded successfully.");
-          fetchPlaidLinkToken();
-        };
-        script.onerror = () => {
-          console.log("Plaid script load error");
-          toast({
-            title: "Error",
-            description: "Failed to load Plaid library. Check network or CSP.",
-            variant: "destructive",
-          });
-        };
+        script.onload = () => fetchPlaidLinkToken();
+        script.onerror = () => toast({
+          title: "Error",
+          description: "Failed to load Plaid library. Check network or CSP.",
+          variant: "destructive",
+        });
         document.head.appendChild(script);
       }
     }
 
-    return () => {
-      setPlaidLinkToken(null); // Reset token when dialog closes
-    };
+    return () => setPlaidLinkToken(null);
   }, [isPlaidDialogOpen, fetchPlaidLinkToken, toast]);
 
-  // Update local state when data is loaded
   useEffect(() => {
-    if (user) {
-      setUserInfo(prev => ({
-        ...prev,
-        email: user.email || "",
-      }));
-    }
+    if (user) setUserInfo(prev => ({ ...prev, email: user.email || "" }));
   }, [user]);
 
   useEffect(() => {
-    if (profile) {
-      setUserInfo(prev => ({
-        ...prev,
-        name: profile.name || "",
-      }));
-    }
+    if (profile) setUserInfo(prev => ({ ...prev, name: profile.name || "" }));
   }, [profile]);
 
   useEffect(() => {
-    if (taxSettings) {
-      setUserInfo(prev => ({
-        ...prev,
-        province: taxSettings.province === 'ON' ? 'ontario' : taxSettings.province,
-      }));
-    }
+    if (taxSettings) setUserInfo(prev => ({ ...prev, province: taxSettings.province === 'ON' ? 'ontario' : taxSettings.province }));
   }, [taxSettings]);
 
-  // Update tab when hash changes
-  useEffect(() => {
-    setActiveTab(getActiveTab());
-  }, [location.hash]);
+  useEffect(() => setActiveTab(getActiveTab()), [location.hash]);
 
   const handleSaveProfile = async () => {
     try {
-      // Update profile (only name now, since other fields moved to Tax Settings)
       if (profile && userInfo.name !== profile.name) {
-        await updateProfile.mutateAsync({ 
-          name: userInfo.name,
-        });
+        await updateProfile.mutateAsync({ name: userInfo.name });
       }
 
       toast({
@@ -350,13 +294,7 @@ const Settings = () => {
 
     try {
       await createRule.mutateAsync(newRule);
-      setNewRule({
-        type: 'business_expense',
-        match_type: 'contains',
-        match_text: '',
-        category: '',
-        subcategory: ''
-      });
+      setNewRule({ type: 'business_expense', match_type: 'contains', match_text: '', category: '', subcategory: '' });
       setIsAddDialogOpen(false);
       toast({
         title: "Rule Added",
@@ -407,30 +345,17 @@ const Settings = () => {
     }
   };
 
-  const getAvailableCategories = (type: string) => {
-    return categoryMappings[type as keyof typeof categoryMappings]?.categories || [];
-  };
-
-  const getAvailableSubcategories = (type: string, category: string) => {
-    return categoryMappings[type as keyof typeof categoryMappings]?.subcategories[category] || [];
-  };
+  const getAvailableCategories = (type: string) => categoryMappings[type as keyof typeof categoryMappings]?.categories || [];
+  const getAvailableSubcategories = (type: string, category: string) => categoryMappings[type as keyof typeof categoryMappings]?.subcategories[category] || [];
 
   const handleSelectAll = (checked: boolean) => {
     setSelectAll(checked);
-    if (checked) {
-      setSelectedRules(new Set(rules.map(rule => rule.id)));
-    } else {
-      setSelectedRules(new Set());
-    }
+    setSelectedRules(checked ? new Set(rules.map(rule => rule.id)) : new Set());
   };
 
   const handleSelectRule = (ruleId: string, checked: boolean) => {
     const newSelected = new Set(selectedRules);
-    if (checked) {
-      newSelected.add(ruleId);
-    } else {
-      newSelected.delete(ruleId);
-    }
+    checked ? newSelected.add(ruleId) : newSelected.delete(ruleId);
     setSelectedRules(newSelected);
     setSelectAll(newSelected.size === rules.length && rules.length > 0);
   };
@@ -439,34 +364,24 @@ const Settings = () => {
     if (selectedRules.size === 0) return;
 
     try {
-      // Get selected rules
       const selectedRuleObjects = rules.filter(rule => selectedRules.has(rule.id));
-      
-      // Get uncategorized transactions (where no categorization has been done)
       const uncategorizedTransactions = transactions.filter(transaction => 
-        !transaction.expense_category && 
-        !transaction.expense_subcategory && 
-        !transaction.income_source
+        !transaction.expense_category && !transaction.expense_subcategory && !transaction.income_source
       );
 
       let updatedCount = 0;
 
-      // Apply each selected rule to matching transactions
       for (const transaction of uncategorizedTransactions) {
         if (!transaction.description) continue;
 
         const description = transaction.description.toLowerCase();
         
-        // Find the first matching rule (rules are processed in order)
         for (const rule of selectedRuleObjects) {
           const matchText = rule.match_text.toLowerCase();
           let isMatch = false;
 
-          if (rule.match_type === 'contains') {
-            isMatch = description.includes(matchText);
-          } else if (rule.match_type === 'equals') {
-            isMatch = description === matchText;
-          }
+          if (rule.match_type === 'contains') isMatch = description.includes(matchText);
+          else if (rule.match_type === 'equals') isMatch = description === matchText;
 
           if (isMatch) {
             const updates: any = {};
@@ -474,37 +389,29 @@ const Settings = () => {
             if (rule.type === 'business_expense') {
               updates.expense_type = 'business';
               updates.expense_category = rule.category;
-              if (rule.subcategory) {
-                updates.expense_subcategory = rule.subcategory;
-              }
+              if (rule.subcategory) updates.expense_subcategory = rule.subcategory;
             } else if (rule.type === 'personal_expense') {
               updates.expense_type = 'personal';
               updates.expense_category = rule.category;
-              if (rule.subcategory) {
-                updates.expense_subcategory = rule.subcategory;
-              }
+              if (rule.subcategory) updates.expense_subcategory = rule.subcategory;
             } else if (rule.type === 'business_income') {
               updates.income_source = rule.category;
             }
 
-            // Apply the update
             await updateTransaction.mutateAsync({ id: transaction.id, updates });
             updatedCount++;
-            break; // Stop after first match
+            break;
           }
         }
       }
 
-      // Show success toast
       toast({
         title: "Rules Applied Successfully",
         description: `Updated ${updatedCount} transaction${updatedCount !== 1 ? 's' : ''} using ${selectedRules.size} selected rule${selectedRules.size !== 1 ? 's' : ''}.`,
       });
 
-      // Clear selection
       setSelectedRules(new Set());
       setSelectAll(false);
-
     } catch (error) {
       toast({
         title: "Error",
@@ -532,7 +439,6 @@ const Settings = () => {
 
         <TabsContent value="profile" className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* User Profile */}
             <Card className="border-blue-200">
               <CardHeader>
                 <CardTitle className="text-blue-900 flex items-center gap-2">
@@ -590,7 +496,6 @@ const Settings = () => {
               </CardContent>
             </Card>
 
-            {/* Connected Accounts */}
             <Card className="border-teal-200">
               <CardHeader>
                 <CardTitle className="text-teal-900 flex items-center gap-2">
@@ -955,4 +860,4 @@ const Settings = () => {
   );
 };
 
-export default Settings; 
+export default Settings;
