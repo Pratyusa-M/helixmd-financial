@@ -23,8 +23,11 @@ import type { Database } from './types';
  * The actual security boundary is in the database via RLS policies, not the API key.
  */
 
-const SUPABASE_URL = "https://kfvmkdxnevfognngesrf.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmdm1rZHhuZXZmb2dubmdlc3JmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA5ODE1MjgsImV4cCI6MjA2NjU1NzUyOH0.QI8dpfoXaRPg5VE70rBdScEyhRI1mh56ElcUeuj6FvY";
+// const SUPABASE_URL = "https://kfvmkdxnevfognngesrf.supabase.co";
+// const SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtmdm1rZHhuZXZmb2dubmdlc3JmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA5ODE1MjgsImV4cCI6MjA2NjU1NzUyOH0.QI8dpfoXaRPg5VE70rBdScEyhRI1mh56ElcUeuj6FvY";
+
+const SUPABASE_URL = "https://rqqliszxnoraztbcnncw.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_jtPdZhgKYigiieKHSBvH9A_5GHnyRui";
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
