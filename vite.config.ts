@@ -49,11 +49,11 @@ export default defineConfig(({ command, mode }) => {
         // Content Security Policy for XSS protection
         'Content-Security-Policy': [
           "default-src 'self'",
-          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://rqqliszxnoraztbcnncw.supabase.co https://cdn.plaid.com",
+          "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://wllrommtrmlwlciaenzf.supabase.co https://cdn.plaid.com",
           "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
           "font-src 'self' https://fonts.gstatic.com data:",
           "img-src 'self' data: blob: https: http:",
-          "connect-src 'self' https://rqqliszxnoraztbcnncw.supabase.co wss://rqqliszxnoraztbcnncw.supabase.co https://api.supabase.co https://*.plaid.com https://rqqliszxnoraztbcnncw.supabase.co/functions/v1",
+          "connect-src 'self' https://wllrommtrmlwlciaenzf.supabase.co wss://wllrommtrmlwlciaenzf.supabase.co https://api.supabase.co https://*.plaid.com https://wllrommtrmlwlciaenzf.supabase.co/functions/v1",
           // Allow iframe embedding in development for Lovable preview
           mode === 'development' ? "frame-src *" : "frame-src 'none'",
           "object-src 'none'",
