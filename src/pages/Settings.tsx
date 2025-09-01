@@ -30,6 +30,7 @@ declare global {
   }
 }
 
+
 const categoryMappings = {
   business_income: {
     categories: ["OHIP", "Fee for Service/Locum", "Honoraria", "AFP Funding", "ER/On-Call Coverage", "Recruiting Bonus", "Stipend", "CMPA Reimbursements", "Other"],
