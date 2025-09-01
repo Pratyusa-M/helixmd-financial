@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { User, CreditCard, Save, Info, Settings2, Plus, Edit2, Trash2, Loader2 } from "lucide-react";
+import { User, CreditCard, Save, Info, Settings2, Plus, Edit2, Trash2, Loader2, Calendar } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useProfile } from "@/hooks/useProfile";
 import { useTaxSettings } from "@/hooks/useTaxSettings";
@@ -20,8 +20,10 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useLocation } from "react-router-dom";
 import { TaxSettingsTab } from "@/components/TaxSettingsTab";
 import { createClient } from "@supabase/supabase-js";
+import { DateRangePicker } from "react-date-range";
+import "react-date-range/dist/styles.css";
+import "react-date-range/dist/theme/default.css";
 
-// Extend the Window interface to include Plaid
 declare global {
   interface Window {
     Plaid?: any;
@@ -30,27 +32,27 @@ declare global {
 
 const categoryMappings = {
   business_income: {
-    categories: ['OHIP', 'Fee for Service/Locum', 'Honoraria', 'AFP Funding', 'ER/On-Call Coverage', 'Recruiting Bonus', 'Stipend', 'CMPA Reimbursements', 'Other'],
-    subcategories: {}
+    categories: ["OHIP", "Fee for Service/Locum", "Honoraria", "AFP Funding", "ER/On-Call Coverage", "Recruiting Bonus", "Stipend", "CMPA Reimbursements", "Other"],
+    subcategories: {},
   },
   business_expense: {
-    categories: ['CME', 'Fees & Insurance', 'Office Expenses or Supplies', 'Auto Expense', 'Parking'],
+    categories: ["CME", "Fees & Insurance", "Office Expenses or Supplies", "Auto Expense", "Parking"],
     subcategories: {
-      'CME': ['Books, Subscriptions, Journals', 'Professional Development/CME', 'Travel & Conference', 'Meals & Entertainment'],
-      'Fees & Insurance': ['CMPA Insurance', 'Insurance - Prof Overhead Expense', 'Professional Association Fees', 'Private Health Plan Premiums', 'Accounting & Legal', 'Bank Fees or Interest', 'Insurance - Home Office'],
-      'Office Expenses or Supplies': ['Capital Assets (Computer, Desk etc)', 'Office Supplies', 'Salary to Secretary', 'Shared Overhead', 'Patient Medical/Drug Supplies', 'Gifts for Staff/Colleagues', 'Office - Telecom', 'Office - Internet', 'Meals & Entertainment GATE', 'Insurance - Office'],
-      'Auto Expense': ['Gas', 'Repairs', 'Insurance (Auto)', 'Licensing Fees', 'Finance/Lease Payment'],
-      'Parking': ['Parking']
-    }
+      "CME": ["Books, Subscriptions, Journals", "Professional Development/CME", "Travel & Conference", "Meals & Entertainment"],
+      "Fees & Insurance": ["CMPA Insurance", "Insurance - Prof Overhead Expense", "Professional Association Fees", "Private Health Plan Premiums", "Accounting & Legal", "Bank Fees or Interest", "Insurance - Home Office"],
+      "Office Expenses or Supplies": ["Capital Assets (Computer, Desk etc)", "Office Supplies", "Salary to Secretary", "Shared Overhead", "Patient Medical/Drug Supplies", "Gifts for Staff/Colleagues", "Office - Telecom", "Office - Internet", "Meals & Entertainment GATE", "Insurance - Office"],
+      "Auto Expense": ["Gas", "Repairs", "Insurance (Auto)", "Licensing Fees", "Finance/Lease Payment"],
+      "Parking": ["Parking"],
+    },
   },
   personal_expense: {
-    categories: ['Shared Business', 'Personal', 'Parking'],
+    categories: ["Shared Business", "Personal", "Parking"],
     subcategories: {
-      'Shared Business': ['Rent/Mortgage', 'Hydro', 'Gas (Utilities)', 'Hot Water Heater', 'Property Tax', 'Water', 'Home Insurance', 'Cleaning Service', 'Other'],
-      'Personal': ['Other'],
-      'Parking': ['Parking']
-    }
-  }
+      "Shared Business": ["Rent/Mortgage", "Hydro", "Gas (Utilities)", "Hot Water Heater", "Property Tax", "Water", "Home Insurance", "Cleaning Service", "Other"],
+      "Personal": ["Other"],
+      "Parking": ["Parking"],
+    },
+  },
 };
 
 const Settings = () => {
@@ -61,7 +63,7 @@ const Settings = () => {
   const { rules, createRule, updateRule, deleteRule } = useCategorization();
   const { transactions, updateTransaction } = useTransactions();
   const location = useLocation();
-  
+
   const [userInfo, setUserInfo] = useState({
     name: "",
     email: "",
@@ -69,11 +71,11 @@ const Settings = () => {
   });
 
   const [newRule, setNewRule] = useState({
-    type: 'business_expense' as const,
-    match_type: 'contains' as const,
-    match_text: '',
-    category: '',
-    subcategory: ''
+    type: "business_expense" as const,
+    match_type: "contains" as const,
+    match_text: "",
+    category: "",
+    subcategory: "",
   });
 
   const [editingRule, setEditingRule] = useState<CategorizationRule | null>(null);
@@ -85,18 +87,23 @@ const Settings = () => {
   const [plaidLinkToken, setPlaidLinkToken] = useState<string | null>(null);
   const [connectedAccounts, setConnectedAccounts] = useState<any[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
-  const [supabase, setSupabase] = useState<any>(null); // State to hold Supabase client
+  const [supabase, setSupabase] = useState<any>(null);
+  const [dateRange, setDateRange] = useState({
+    startDate: new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1),
+    endDate: new Date(),
+    key: "selection",
+  });
+  const [isFetchingTransactions, setIsFetchingTransactions] = useState(false);
 
   const getActiveTab = () => {
     const hash = location.hash.slice(1);
-    if (hash === 'automations') return 'automations';
-    if (hash === 'tax-settings') return 'tax-settings';
-    return 'profile';
+    if (hash === "automations") return "automations";
+    if (hash === "tax-settings") return "tax-settings";
+    return "profile";
   };
 
   const [activeTab, setActiveTab] = useState(getActiveTab());
 
-  // Initialize Supabase client when component mounts
   useEffect(() => {
     const initSupabase = () => {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -117,13 +124,13 @@ const Settings = () => {
   useEffect(() => {
     const fetchConnectedAccounts = async () => {
       if (!user || !supabase) return;
-      
+
       setIsLoadingAccounts(true);
       const { data, error } = await supabase
-        .from('connected_accounts')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+        .from("connected_accounts")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
 
       if (error) {
         toast({
@@ -140,30 +147,34 @@ const Settings = () => {
     fetchConnectedAccounts();
   }, [user, toast, supabase]);
 
-  const fetchPlaidLinkToken = useCallback(async (retryCount = 0) => {
-    const maxRetries = 3;
-    try {
-      if (!supabase) throw new Error("Supabase client not initialized");
-      const { data, error } = await supabase.functions.invoke('create_link_token', {
-        body: { user_id: user?.id },
-      });
-
-      if (error) throw error;
-
-      setPlaidLinkToken(data.link_token);
-    } catch (error) {
-      if (retryCount < maxRetries) {
-        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
-        await fetchPlaidLinkToken(retryCount + 1);
-      } else {
-        toast({
-          title: "Error",
-          description: "Failed to initialize Plaid Link after multiple attempts. Check Supabase Edge Function setup or contact support.",
-          variant: "destructive",
+  const fetchPlaidLinkToken = useCallback(
+    async (retryCount = 0) => {
+      const maxRetries = 3;
+      try {
+        if (!supabase) throw new Error("Supabase client not initialized");
+        const { data, error } = await supabase.functions.invoke("create_link_token", {
+          body: { user_id: user?.id },
         });
+
+        if (error) throw error;
+
+        setPlaidLinkToken(data.link_token);
+      } catch (error) {
+        if (retryCount < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, 2000 * (retryCount + 1)));
+          await fetchPlaidLinkToken(retryCount + 1);
+        } else {
+          toast({
+            title: "Error",
+            description:
+              "Failed to initialize Plaid Link after multiple attempts. Check Supabase Edge Function setup or contact support.",
+            variant: "destructive",
+          });
+        }
       }
-    }
-  }, [toast, user?.id, supabase]);
+    },
+    [toast, user?.id, supabase]
+  );
 
   const initializePlaidLink = useCallback(() => {
     if (!plaidLinkToken || !window.Plaid) {
@@ -197,17 +208,17 @@ const Settings = () => {
   const handlePlaidSuccess = async (publicToken: string, metadata: any) => {
     try {
       if (!supabase) throw new Error("Supabase client not initialized");
-      const { data, error } = await supabase.functions.invoke('exchange_public_token', {
+      const { data, error } = await supabase.functions.invoke("exchange_public_token", {
         body: { public_token: publicToken, metadata },
       });
 
       if (error) throw error;
 
       const { data: accounts, error: fetchError } = await supabase
-        .from('connected_accounts')
-        .select('*')
-        .eq('user_id', user?.id)
-        .order('created_at', { ascending: false });
+        .from("connected_accounts")
+        .select("*")
+        .eq("user_id", user?.id)
+        .order("created_at", { ascending: false });
 
       if (fetchError) throw fetchError;
 
@@ -250,15 +261,19 @@ const Settings = () => {
   }, [isPlaidDialogOpen, fetchPlaidLinkToken, toast]);
 
   useEffect(() => {
-    if (user) setUserInfo(prev => ({ ...prev, email: user.email || "" }));
+    if (user) setUserInfo((prev) => ({ ...prev, email: user.email || "" }));
   }, [user]);
 
   useEffect(() => {
-    if (profile) setUserInfo(prev => ({ ...prev, name: profile.name || "" }));
+    if (profile) setUserInfo((prev) => ({ ...prev, name: profile.name || "" }));
   }, [profile]);
 
   useEffect(() => {
-    if (taxSettings) setUserInfo(prev => ({ ...prev, province: taxSettings.province === 'ON' ? 'ontario' : taxSettings.province }));
+    if (taxSettings)
+      setUserInfo((prev) => ({
+        ...prev,
+        province: taxSettings.province === "ON" ? "ontario" : taxSettings.province,
+      }));
   }, [taxSettings]);
 
   useEffect(() => setActiveTab(getActiveTab()), [location.hash]);
@@ -294,7 +309,13 @@ const Settings = () => {
 
     try {
       await createRule.mutateAsync(newRule);
-      setNewRule({ type: 'business_expense', match_type: 'contains', match_text: '', category: '', subcategory: '' });
+      setNewRule({
+        type: "business_expense",
+        match_type: "contains",
+        match_text: "",
+        category: "",
+        subcategory: "",
+      });
       setIsAddDialogOpen(false);
       toast({
         title: "Rule Added",
@@ -345,12 +366,14 @@ const Settings = () => {
     }
   };
 
-  const getAvailableCategories = (type: string) => categoryMappings[type as keyof typeof categoryMappings]?.categories || [];
-  const getAvailableSubcategories = (type: string, category: string) => categoryMappings[type as keyof typeof categoryMappings]?.subcategories[category] || [];
+  const getAvailableCategories = (type: string) =>
+    categoryMappings[type as keyof typeof categoryMappings]?.categories || [];
+  const getAvailableSubcategories = (type: string, category: string) =>
+    categoryMappings[type as keyof typeof categoryMappings]?.subcategories[category] || [];
 
   const handleSelectAll = (checked: boolean) => {
     setSelectAll(checked);
-    setSelectedRules(checked ? new Set(rules.map(rule => rule.id)) : new Set());
+    setSelectedRules(checked ? new Set(rules.map((rule) => rule.id)) : new Set());
   };
 
   const handleSelectRule = (ruleId: string, checked: boolean) => {
@@ -364,9 +387,12 @@ const Settings = () => {
     if (selectedRules.size === 0) return;
 
     try {
-      const selectedRuleObjects = rules.filter(rule => selectedRules.has(rule.id));
-      const uncategorizedTransactions = transactions.filter(transaction => 
-        !transaction.expense_category && !transaction.expense_subcategory && !transaction.income_source
+      const selectedRuleObjects = rules.filter((rule) => selectedRules.has(rule.id));
+      const uncategorizedTransactions = transactions.filter(
+        (transaction) =>
+          !transaction.expense_category &&
+          !transaction.expense_subcategory &&
+          !transaction.income_source
       );
 
       let updatedCount = 0;
@@ -375,26 +401,26 @@ const Settings = () => {
         if (!transaction.description) continue;
 
         const description = transaction.description.toLowerCase();
-        
+
         for (const rule of selectedRuleObjects) {
           const matchText = rule.match_text.toLowerCase();
           let isMatch = false;
 
-          if (rule.match_type === 'contains') isMatch = description.includes(matchText);
-          else if (rule.match_type === 'equals') isMatch = description === matchText;
+          if (rule.match_type === "contains") isMatch = description.includes(matchText);
+          else if (rule.match_type === "equals") isMatch = description === matchText;
 
           if (isMatch) {
             const updates: any = {};
-            
-            if (rule.type === 'business_expense') {
-              updates.expense_type = 'business';
+
+            if (rule.type === "business_expense") {
+              updates.expense_type = "business";
               updates.expense_category = rule.category;
               if (rule.subcategory) updates.expense_subcategory = rule.subcategory;
-            } else if (rule.type === 'personal_expense') {
-              updates.expense_type = 'personal';
+            } else if (rule.type === "personal_expense") {
+              updates.expense_type = "personal";
               updates.expense_category = rule.category;
               if (rule.subcategory) updates.expense_subcategory = rule.subcategory;
-            } else if (rule.type === 'business_income') {
+            } else if (rule.type === "business_income") {
               updates.income_source = rule.category;
             }
 
@@ -407,7 +433,7 @@ const Settings = () => {
 
       toast({
         title: "Rules Applied Successfully",
-        description: `Updated ${updatedCount} transaction${updatedCount !== 1 ? 's' : ''} using ${selectedRules.size} selected rule${selectedRules.size !== 1 ? 's' : ''}.`,
+        description: `Updated ${updatedCount} transaction${updatedCount !== 1 ? "s" : ""} using ${selectedRules.size} selected rule${selectedRules.size !== 1 ? "s" : ""}.`,
       });
 
       setSelectedRules(new Set());
@@ -418,6 +444,49 @@ const Settings = () => {
         description: "Failed to apply categorization rules.",
         variant: "destructive",
       });
+    }
+  };
+
+  const fetchPlaidTransactions = async (accountId: string, startDate: string, endDate: string) => {
+    setIsFetchingTransactions(true);
+    try {
+      if (!supabase) throw new Error("Supabase client not initialized");
+      const account = connectedAccounts.find((acc) => acc.id === accountId);
+      if (!account || !account.access_token) throw new Error("Account not found or invalid");
+
+      const response = await supabase.functions.invoke("fetch_plaid_transactions", {
+        body: { accountId, startDate, endDate },
+      });
+
+      if (response.error) throw new Error(response.error.message || "Failed to fetch transactions");
+
+      toast({
+        title: "Success",
+        description: `Fetched and saved ${response.data.count} transactions for ${account.institution}.`,
+      });
+
+      // Refresh transactions
+      const { data: fetchedTransactions, error } = await supabase
+        .from("plaid_transactions")
+        .select("*")
+        .eq("connected_account_id", accountId)
+        .gte("date", startDate)
+        .lte(endDate);
+      if (!error) {
+        setConnectedAccounts((prev) =>
+          prev.map((acc) =>
+            acc.id === accountId ? { ...acc, transactions: fetchedTransactions } : acc
+          )
+        );
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: `Failed to fetch transactions: ${error.message}`,
+        variant: "destructive",
+      });
+    } finally {
+      setIsFetchingTransactions(false);
     }
   };
 
@@ -452,11 +521,11 @@ const Settings = () => {
                   <Input
                     id="name"
                     value={userInfo.name}
-                    onChange={(e) => setUserInfo(prev => ({ ...prev, name: e.target.value }))}
+                    onChange={(e) => setUserInfo((prev) => ({ ...prev, name: e.target.value }))}
                     className="border-blue-200 focus:border-blue-400"
                   />
                 </div>
-                
+
                 <div>
                   <Label htmlFor="email">Email Address</Label>
                   <Input
@@ -468,10 +537,13 @@ const Settings = () => {
                   />
                   <p className="text-xs text-gray-500 mt-1">Email cannot be changed</p>
                 </div>
-                
+
                 <div>
                   <Label htmlFor="province">Province</Label>
-                  <Select value={userInfo.province} onValueChange={(value) => setUserInfo(prev => ({ ...prev, province: value }))}>
+                  <Select
+                    value={userInfo.province}
+                    onValueChange={(value) => setUserInfo((prev) => ({ ...prev, province: value }))}
+                  >
                     <SelectTrigger className="border-blue-200 focus:border-blue-400">
                       <SelectValue />
                     </SelectTrigger>
@@ -484,8 +556,8 @@ const Settings = () => {
                     </SelectContent>
                   </Select>
                 </div>
-                
-                <Button 
+
+                <Button
                   onClick={handleSaveProfile}
                   className="bg-blue-600 hover:bg-blue-700 w-full"
                   disabled={updateProfile.isPending}
@@ -515,22 +587,118 @@ const Settings = () => {
                   </div>
                 ) : (
                   connectedAccounts.map((account) => (
-                    <div key={account.id} className="border border-gray-200 rounded-lg p-4">
+                    <div key={account.id} className="border border-gray-200 rounded-lg p-4 mb-4">
                       <div className="flex items-center justify-between mb-2">
                         <div>
                           <h4 className="font-medium text-gray-900">{account.institution}</h4>
                           <p className="text-sm text-gray-600">{account.account_type}</p>
                         </div>
-                        <Badge className="bg-green-100 text-green-800">
-                          {account.status}
-                        </Badge>
+                        <Badge className="bg-green-100 text-green-800">{account.status}</Badge>
                       </div>
-                      <p className="text-xs text-gray-500">Last sync: {new Date(account.last_sync).toLocaleString()}</p>
+                      <p className="text-xs text-gray-500">
+                        Last sync: {new Date(account.last_sync).toLocaleString()}
+                      </p>
+                      <div className="mt-2">
+                        <Button
+                          variant="outline"
+                          className="w-full border-teal-300 text-teal-600 hover:bg-teal-50"
+                          onClick={() => setIsPlaidDialogOpen(true)}
+                          disabled={isFetchingTransactions}
+                        >
+                          <Calendar className="h-4 w-4 mr-2" />
+                          Fetch Transactions
+                        </Button>
+                        <Dialog
+                          open={isPlaidDialogOpen && connectedAccounts.some((acc) => acc.id === account.id)}
+                          onOpenChange={setIsPlaidDialogOpen}
+                        >
+                          <DialogContent className="sm:max-w-[800px]">
+                            <DialogHeader>
+                              <DialogTitle>Fetch Transactions for {account.institution}</DialogTitle>
+                              <DialogDescription>
+                                Select a date range to fetch transactions for this account.
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="py-4">
+                              <DateRangePicker
+                                onChange={(item: any) => setDateRange(item.selection)}
+                                showSelectionPreview={true}
+                                moveRangeOnFirstSelection={false}
+                                months={1}
+                                ranges={[dateRange]}
+                                direction="horizontal"
+                                className="border rounded-lg p-2"
+                              />
+                              <Button
+                                className="w-full mt-4 bg-teal-600 hover:bg-teal-700"
+                                onClick={() =>
+                                  fetchPlaidTransactions(
+                                    account.id,
+                                    dateRange.startDate.toISOString().split("T")[0],
+                                    dateRange.endDate.toISOString().split("T")[0]
+                                  )
+                                }
+                                disabled={isFetchingTransactions}
+                              >
+                                {isFetchingTransactions ? (
+                                  <>
+                                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                                    Fetching...
+                                  </>
+                                ) : (
+                                  "Fetch Transactions"
+                                )}
+                              </Button>
+                              {account.transactions && account.transactions.length > 0 && (
+                                <Table className="mt-4">
+                                  <TableHeader>
+                                    <TableRow>
+                                      <TableHead>Date</TableHead>
+                                      <TableHead>Name</TableHead>
+                                      <TableHead>Amount</TableHead>
+                                      <TableHead>Type</TableHead>
+                                      <TableHead>Status</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
+                                    {account.transactions.map((tx: any) => (
+                                      <TableRow key={tx.transaction_id}>
+                                        <TableCell>
+                                          {new Date(tx.date).toLocaleDateString()}
+                                        </TableCell>
+                                        <TableCell>{tx.name}</TableCell>
+                                        <TableCell>
+                                          {Math.abs(tx.amount)} {tx.transaction_type === "credit" ? "(Credit)" : "(Debit)"}
+                                        </TableCell>
+                                        <TableCell>{tx.transaction_type}</TableCell>
+                                        <TableCell>{tx.pending ? "Pending" : "Posted"}</TableCell>
+                                      </TableRow>
+                                    ))}
+                                  </TableBody>
+                                </Table>
+                              )}
+                            </div>
+                            <DialogFooter>
+                              <p className="text-xs text-gray-500">
+                                By fetching, you agree to Plaid's{" "}
+                                <a
+                                  href="https://plaid.com/legal/#end-user-privacy-policy"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline"
+                                >
+                                  Privacy Policy
+                                </a>.
+                              </p>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
                     </div>
                   ))
                 )}
-                
-                <Dialog open={isPlaidDialogOpen} onOpenChange={setIsPlaidDialogOpen}>
+
+                <Dialog open={isPlaidDialogOpen && !connectedAccounts.length} onOpenChange={setIsPlaidDialogOpen}>
                   <DialogTrigger asChild>
                     <Button variant="outline" className="w-full border-teal-300 text-teal-600 hover:bg-teal-50">
                       <CreditCard className="h-4 w-4 mr-2" />
@@ -545,7 +713,7 @@ const Settings = () => {
                       </DialogDescription>
                     </DialogHeader>
                     <div className="py-4">
-                      <Button 
+                      <Button
                         className="w-full bg-teal-600 hover:bg-teal-700"
                         onClick={initializePlaidLink}
                         disabled={!plaidLinkToken || !window.Plaid}
@@ -555,10 +723,10 @@ const Settings = () => {
                     </div>
                     <DialogFooter>
                       <p className="text-xs text-gray-500">
-                        By connecting, you agree to Plaid's{' '}
-                        <a 
-                          href="https://plaid.com/legal/#end-user-privacy-policy" 
-                          target="_blank" 
+                        By connecting, you agree to Plaid's{" "}
+                        <a
+                          href="https://plaid.com/legal/#end-user-privacy-policy"
+                          target="_blank"
                           rel="noopener noreferrer"
                           className="underline"
                         >
@@ -607,18 +775,29 @@ const Settings = () => {
                     </DialogHeader>
                     <div className="grid gap-4 py-4">
                       <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="match_text" className="text-right">Transaction Description</Label>
+                        <Label htmlFor="match_text" className="text-right">
+                          Transaction Description
+                        </Label>
                         <Input
                           id="match_text"
                           value={newRule.match_text}
-                          onChange={(e) => setNewRule(prev => ({ ...prev, match_text: e.target.value }))}
+                          onChange={(e) =>
+                            setNewRule((prev) => ({ ...prev, match_text: e.target.value }))
+                          }
                           className="col-span-3"
                           placeholder="e.g., Tim Hortons, Gas Station"
                         />
                       </div>
                       <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="match_type" className="text-right">Match Type</Label>
-                        <Select value={newRule.match_type} onValueChange={(value: any) => setNewRule(prev => ({ ...prev, match_type: value }))}>
+                        <Label htmlFor="match_type" className="text-right">
+                          Match Type
+                        </Label>
+                        <Select
+                          value={newRule.match_type}
+                          onValueChange={(value: any) =>
+                            setNewRule((prev) => ({ ...prev, match_type: value }))
+                          }
+                        >
                           <SelectTrigger className="col-span-3">
                             <SelectValue />
                           </SelectTrigger>
@@ -629,8 +808,20 @@ const Settings = () => {
                         </Select>
                       </div>
                       <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="type" className="text-right">Type</Label>
-                        <Select value={newRule.type} onValueChange={(value: any) => setNewRule(prev => ({ ...prev, type: value, category: '', subcategory: '' }))}>
+                        <Label htmlFor="type" className="text-right">
+                          Type
+                        </Label>
+                        <Select
+                          value={newRule.type}
+                          onValueChange={(value: any) =>
+                            setNewRule((prev) => ({
+                              ...prev,
+                              type: value,
+                              category: "",
+                              subcategory: "",
+                            }))
+                          }
+                        >
                           <SelectTrigger className="col-span-3">
                             <SelectValue />
                           </SelectTrigger>
@@ -642,36 +833,64 @@ const Settings = () => {
                         </Select>
                       </div>
                       <div className="grid grid-cols-4 items-center gap-4">
-                        <Label htmlFor="category" className="text-right">Category</Label>
-                        <Select value={newRule.category} onValueChange={(value) => setNewRule(prev => ({ ...prev, category: value, subcategory: '' }))}>
+                        <Label htmlFor="category" className="text-right">
+                          Category
+                        </Label>
+                        <Select
+                          value={newRule.category}
+                          onValueChange={(value) =>
+                            setNewRule((prev) => ({ ...prev, category: value, subcategory: "" }))
+                          }
+                        >
                           <SelectTrigger className="col-span-3">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {getAvailableCategories(newRule.type).map(cat => (
-                              <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                            {getAvailableCategories(newRule.type).map((cat) => (
+                              <SelectItem key={cat} value={cat}>
+                                {cat}
+                              </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
                       </div>
-                      {((newRule.type === 'business_expense') || (newRule.type === 'personal_expense' && newRule.category !== 'Personal')) && getAvailableSubcategories(newRule.type, newRule.category).length > 0 && (
-                        <div className="grid grid-cols-4 items-center gap-4">
-                          <Label htmlFor="subcategory" className="text-right">Subcategory</Label>
-                          <Select value={newRule.subcategory} onValueChange={(value) => setNewRule(prev => ({ ...prev, subcategory: value }))}>
-                            <SelectTrigger className="col-span-3">
-                              <SelectValue placeholder="Select subcategory (optional)" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {getAvailableSubcategories(newRule.type, newRule.category).map(subcat => (
-                                <SelectItem key={subcat} value={subcat}>{subcat}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      )}
+                      {((newRule.type === "business_expense") ||
+                        (newRule.type === "personal_expense" &&
+                          newRule.category !== "Personal")) &&
+                        getAvailableSubcategories(newRule.type, newRule.category)
+                          .length > 0 && (
+                          <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="subcategory" className="text-right">
+                              Subcategory
+                            </Label>
+                            <Select
+                              value={newRule.subcategory}
+                              onValueChange={(value) =>
+                                setNewRule((prev) => ({ ...prev, subcategory: value }))
+                              }
+                            >
+                              <SelectTrigger className="col-span-3">
+                                <SelectValue placeholder="Select subcategory (optional)" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {getAvailableSubcategories(newRule.type, newRule.category).map(
+                                  (subcat) => (
+                                    <SelectItem key={subcat} value={subcat}>
+                                      {subcat}
+                                    </SelectItem>
+                                  )
+                                )}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
                     </div>
                     <DialogFooter>
-                      <Button type="submit" onClick={handleAddRule} disabled={createRule.isPending}>
+                      <Button
+                        type="submit"
+                        onClick={handleAddRule}
+                        disabled={createRule.isPending}
+                      >
                         {createRule.isPending ? "Creating..." : "Create Rule"}
                       </Button>
                     </DialogFooter>
@@ -681,8 +900,8 @@ const Settings = () => {
 
               {selectedRules.size > 0 && (
                 <div className="mb-4">
-                  <Button 
-                    variant="default" 
+                  <Button
+                    variant="default"
                     className="bg-primary hover:bg-primary/90"
                     onClick={handleApplySelectedRules}
                     disabled={updateTransaction.isPending}
@@ -690,7 +909,9 @@ const Settings = () => {
                     {updateTransaction.isPending && (
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                     )}
-                    {updateTransaction.isPending ? "Applying Rules..." : `Apply Selected Rules (${selectedRules.size})`}
+                    {updateTransaction.isPending
+                      ? "Applying Rules..."
+                      : `Apply Selected Rules (${selectedRules.size})`}
                   </Button>
                 </div>
               )}
@@ -699,7 +920,10 @@ const Settings = () => {
                 <div className="text-center py-8 text-gray-500">
                   <Settings2 className="h-12 w-12 mx-auto mb-4 text-gray-300" />
                   <p>No categorization rules configured yet.</p>
-                  <p className="text-sm">Create your first rule to start automating transaction categorization.</p>
+                  <p className="text-sm">
+                    Create your first rule to start automating transaction
+                    categorization.
+                  </p>
                 </div>
               ) : (
                 <Table>
@@ -725,13 +949,15 @@ const Settings = () => {
                         <TableCell>
                           <Checkbox
                             checked={selectedRules.has(rule.id)}
-                            onCheckedChange={(checked) => handleSelectRule(rule.id, checked as boolean)}
+                            onCheckedChange={(checked) =>
+                              handleSelectRule(rule.id, checked as boolean)
+                            }
                             aria-label={`Select rule for ${rule.match_text}`}
                           />
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline" className="capitalize">
-                            {rule.type.replace('_', ' ')}
+                            {rule.type.replace("_", " ")}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -741,13 +967,16 @@ const Settings = () => {
                           </div>
                         </TableCell>
                         <TableCell>{rule.category}</TableCell>
-                        <TableCell>{rule.subcategory || '-'}</TableCell>
+                        <TableCell>{rule.subcategory || "-"}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-2">
-                            <Dialog open={isEditDialogOpen && editingRule?.id === rule.id} onOpenChange={(open) => {
-                              setIsEditDialogOpen(open);
-                              if (!open) setEditingRule(null);
-                            }}>
+                            <Dialog
+                              open={isEditDialogOpen && editingRule?.id === rule.id}
+                              onOpenChange={(open) => {
+                                setIsEditDialogOpen(open);
+                                if (!open) setEditingRule(null);
+                              }}
+                            >
                               <DialogTrigger asChild>
                                 <Button
                                   variant="ghost"
@@ -761,78 +990,177 @@ const Settings = () => {
                                 <DialogHeader>
                                   <DialogTitle>Edit Categorization Rule</DialogTitle>
                                   <DialogDescription>
-                                    Update the rule for automatic transaction categorization.
+                                    Update the rule for automatic transaction
+                                    categorization.
                                   </DialogDescription>
                                 </DialogHeader>
                                 {editingRule && (
                                   <div className="grid gap-4 py-4">
                                     <div className="grid grid-cols-4 items-center gap-4">
-                                      <Label htmlFor="edit_type" className="text-right">Type</Label>
-                                      <Select value={editingRule.type} onValueChange={(value: any) => setEditingRule(prev => prev ? { ...prev, type: value, category: '', subcategory: '' } : null)}>
+                                      <Label htmlFor="edit_type" className="text-right">
+                                        Type
+                                      </Label>
+                                      <Select
+                                        value={editingRule.type}
+                                        onValueChange={(value: any) =>
+                                          setEditingRule((prev) =>
+                                            prev
+                                              ? {
+                                                  ...prev,
+                                                  type: value,
+                                                  category: "",
+                                                  subcategory: "",
+                                                }
+                                              : null
+                                          )
+                                        }
+                                      >
                                         <SelectTrigger className="col-span-3">
                                           <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
-                                          <SelectItem value="business_income">Business Income</SelectItem>
-                                          <SelectItem value="business_expense">Business Expense</SelectItem>
-                                          <SelectItem value="personal_expense">Personal Expense</SelectItem>
+                                          <SelectItem value="business_income">
+                                            Business Income
+                                          </SelectItem>
+                                          <SelectItem value="business_expense">
+                                            Business Expense
+                                          </SelectItem>
+                                          <SelectItem value="personal_expense">
+                                            Personal Expense
+                                          </SelectItem>
                                         </SelectContent>
                                       </Select>
                                     </div>
                                     <div className="grid grid-cols-4 items-center gap-4">
-                                      <Label htmlFor="edit_match_type" className="text-right">Match Type</Label>
-                                      <Select value={editingRule.match_type} onValueChange={(value: any) => setEditingRule(prev => prev ? { ...prev, match_type: value } : null)}>
+                                      <Label
+                                        htmlFor="edit_match_type"
+                                        className="text-right"
+                                      >
+                                        Match Type
+                                      </Label>
+                                      <Select
+                                        value={editingRule.match_type}
+                                        onValueChange={(value: any) =>
+                                          setEditingRule((prev) =>
+                                            prev ? { ...prev, match_type: value } : null
+                                          )
+                                        }
+                                      >
                                         <SelectTrigger className="col-span-3">
                                           <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
-                                          <SelectItem value="contains">Contains</SelectItem>
-                                          <SelectItem value="equals">Equals</SelectItem>
+                                          <SelectItem value="contains">
+                                            Contains
+                                          </SelectItem>
+                                          <SelectItem value="equals">
+                                            Equals
+                                          </SelectItem>
                                         </SelectContent>
                                       </Select>
                                     </div>
                                     <div className="grid grid-cols-4 items-center gap-4">
-                                      <Label htmlFor="edit_match_text" className="text-right">Match Text</Label>
+                                      <Label
+                                        htmlFor="edit_match_text"
+                                        className="text-right"
+                                      >
+                                        Match Text
+                                      </Label>
                                       <Input
                                         id="edit_match_text"
                                         value={editingRule.match_text}
-                                        onChange={(e) => setEditingRule(prev => prev ? { ...prev, match_text: e.target.value } : null)}
+                                        onChange={(e) =>
+                                          setEditingRule((prev) =>
+                                            prev
+                                              ? { ...prev, match_text: e.target.value }
+                                              : null
+                                          )
+                                        }
                                         className="col-span-3"
                                       />
                                     </div>
                                     <div className="grid grid-cols-4 items-center gap-4">
-                                      <Label htmlFor="edit_category" className="text-right">Category</Label>
-                                      <Select value={editingRule.category} onValueChange={(value) => setEditingRule(prev => prev ? { ...prev, category: value, subcategory: '' } : null)}>
+                                      <Label
+                                        htmlFor="edit_category"
+                                        className="text-right"
+                                      >
+                                        Category
+                                      </Label>
+                                      <Select
+                                        value={editingRule.category}
+                                        onValueChange={(value) =>
+                                          setEditingRule((prev) =>
+                                            prev
+                                              ? { ...prev, category: value, subcategory: "" }
+                                              : null
+                                          )
+                                        }
+                                      >
                                         <SelectTrigger className="col-span-3">
                                           <SelectValue />
                                         </SelectTrigger>
                                         <SelectContent>
-                                          {getAvailableCategories(editingRule.type).map(cat => (
-                                            <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                                          {getAvailableCategories(
+                                            editingRule.type
+                                          ).map((cat) => (
+                                            <SelectItem key={cat} value={cat}>
+                                              {cat}
+                                            </SelectItem>
                                           ))}
                                         </SelectContent>
                                       </Select>
                                     </div>
-                                    {(editingRule.type === 'business_expense' || editingRule.type === 'personal_expense') && getAvailableSubcategories(editingRule.type, editingRule.category).length > 0 && (
-                                      <div className="grid grid-cols-4 items-center gap-4">
-                                        <Label htmlFor="edit_subcategory" className="text-right">Subcategory</Label>
-                                        <Select value={editingRule.subcategory || ''} onValueChange={(value) => setEditingRule(prev => prev ? { ...prev, subcategory: value } : null)}>
-                                          <SelectTrigger className="col-span-3">
-                                            <SelectValue placeholder="Select subcategory (optional)" />
-                                          </SelectTrigger>
-                                          <SelectContent>
-                                            {getAvailableSubcategories(editingRule.type, editingRule.category).map(subcat => (
-                                              <SelectItem key={subcat} value={subcat}>{subcat}</SelectItem>
-                                            ))}
-                                          </SelectContent>
-                                        </Select>
-                                      </div>
-                                    )}
+                                    {(editingRule.type === "business_expense" ||
+                                      editingRule.type === "personal_expense") &&
+                                      getAvailableSubcategories(
+                                        editingRule.type,
+                                        editingRule.category
+                                      ).length > 0 && (
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                          <Label
+                                            htmlFor="edit_subcategory"
+                                            className="text-right"
+                                          >
+                                            Subcategory
+                                          </Label>
+                                          <Select
+                                            value={editingRule.subcategory || ""}
+                                            onValueChange={(value) =>
+                                              setEditingRule((prev) =>
+                                                prev ? { ...prev, subcategory: value } : null
+                                              )
+                                            }
+                                          >
+                                            <SelectTrigger className="col-span-3">
+                                              <SelectValue placeholder="Select subcategory (optional)" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              {getAvailableSubcategories(
+                                                editingRule.type,
+                                                editingRule.category
+                                              ).map((subcat) => (
+                                                <SelectItem
+                                                  key={subcat}
+                                                  value={subcat}
+                                                >
+                                                  {subcat}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                      )}
                                   </div>
                                 )}
                                 <DialogFooter>
-                                  <Button type="submit" onClick={handleEditRule} disabled={updateRule.isPending}>
-                                    {updateRule.isPending ? "Updating..." : "Update Rule"}
+                                  <Button
+                                    type="submit"
+                                    onClick={handleEditRule}
+                                    disabled={updateRule.isPending}
+                                  >
+                                    {updateRule.isPending
+                                      ? "Updating..."
+                                      : "Update Rule"}
                                   </Button>
                                 </DialogFooter>
                               </DialogContent>

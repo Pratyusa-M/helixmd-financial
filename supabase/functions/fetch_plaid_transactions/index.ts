@@ -50,9 +50,9 @@ serve(async (req)=>{
       headers: corsHeaders
     });
   }
-  const { public_token, metadata } = body;
-  if (!public_token || !metadata) {
-    return new Response("Missing public_token or metadata", {
+  const { accountId, startDate, endDate } = body;
+  if (!accountId || !startDate || !endDate) {
+    return new Response("Missing accountId, startDate, or endDate", {
       status: 400,
       headers: corsHeaders
     });
@@ -86,7 +86,12 @@ serve(async (req)=>{
     });
   }
   try {
-    const exchangeResponse = await fetch(`${baseUrl}/item/public_token/exchange`, {
+    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+    const { data: account, error: accountError } = await supabaseAdmin.from("connected_accounts").select("access_token").eq("id", accountId).eq("user_id", userId).single();
+    if (accountError || !account) {
+      throw new Error("Account not found or unauthorized");
+    }
+    const response = await fetch(`${baseUrl}/transactions/get`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -94,27 +99,38 @@ serve(async (req)=>{
       body: JSON.stringify({
         client_id: PLAID_CLIENT_ID,
         secret: PLAID_SECRET,
-        public_token
+        access_token: account.access_token,
+        start_date: startDate,
+        end_date: endDate,
+        options: {
+          count: 500,
+          offset: 0
+        }
       })
     });
-    const exchangeData = await exchangeResponse.json();
-    if (!exchangeResponse.ok) {
-      throw new Error(exchangeData.error_message || "Plaid exchange error");
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error_message || "Plaid API error");
     }
-    const { access_token, item_id } = exchangeData;
-    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const { error } = await supabaseAdmin.from("connected_accounts").insert({
-      user_id: userId,
-      access_token,
-      item_id,
-      institution: metadata.institution.name,
-      account_type: metadata.accounts[0].type,
-      status: "active",
-      last_sync: new Date().toISOString()
-    });
+    const transactions = data.transactions.map((tx)=>({
+        connected_account_id: accountId,
+        transaction_id: tx.transaction_id,
+        amount: tx.amount,
+        date: new Date(tx.date).toISOString(),
+        name: tx.name,
+        pending: tx.pending || false,
+        category: tx.category?.[0] || null,
+        subcategory: tx.category?.[1] || null,
+        transaction_type: tx.amount > 0 ? "credit" : "debit"
+      }));
+    const { error } = await supabaseAdmin.from("plaid_transactions").insert(transactions);
     if (error) throw error;
+    await supabaseAdmin.from("connected_accounts").update({
+      last_sync: new Date().toISOString()
+    }).eq("id", accountId);
     return new Response(JSON.stringify({
-      success: true
+      success: true,
+      count: transactions.length
     }), {
       status: 200,
       headers: {
@@ -125,7 +141,7 @@ serve(async (req)=>{
   } catch (error) {
     console.error("Error details:", error);
     return new Response(JSON.stringify({
-      error: error.message || "Failed to exchange token or store account"
+      error: error.message || "Failed to fetch transactions"
     }), {
       status: 500,
       headers: {

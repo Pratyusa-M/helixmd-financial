@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,8 +19,15 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLocation } from "react-router-dom";
 import { TaxSettingsTab } from "@/components/TaxSettingsTab";
+import { createClient } from "@supabase/supabase-js";
 
-// Category and subcategory mappings
+// Extend the Window interface to include Plaid
+declare global {
+  interface Window {
+    Plaid?: any;
+  }
+}
+
 const categoryMappings = {
   business_income: {
     categories: ['OHIP', 'Fee for Service/Locum', 'Honoraria', 'AFP Funding', 'ER/On-Call Coverage', 'Recruiting Bonus', 'Stipend', 'CMPA Reimbursements', 'Other'],
@@ -31,7 +38,7 @@ const categoryMappings = {
     subcategories: {
       'CME': ['Books, Subscriptions, Journals', 'Professional Development/CME', 'Travel & Conference', 'Meals & Entertainment'],
       'Fees & Insurance': ['CMPA Insurance', 'Insurance - Prof Overhead Expense', 'Professional Association Fees', 'Private Health Plan Premiums', 'Accounting & Legal', 'Bank Fees or Interest', 'Insurance - Home Office'],
-      'Office Expenses or Supplies': ['Capital Assets (Computer, Desk etc)', 'Office Supplies', 'Salary to Secretary', 'Shared Overhead', 'Patient Medical/Drug Supplies', 'Gifts for Staff/Colleagues', 'Office - Telecom', 'Office - Internet', 'Meals & Entertainment', 'Insurance - Office'],
+      'Office Expenses or Supplies': ['Capital Assets (Computer, Desk etc)', 'Office Supplies', 'Salary to Secretary', 'Shared Overhead', 'Patient Medical/Drug Supplies', 'Gifts for Staff/Colleagues', 'Office - Telecom', 'Office - Internet', 'Meals & Entertainment GATE', 'Insurance - Office'],
       'Auto Expense': ['Gas', 'Repairs', 'Insurance (Auto)', 'Licensing Fees', 'Finance/Lease Payment'],
       'Parking': ['Parking']
     }
@@ -74,10 +81,14 @@ const Settings = () => {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedRules, setSelectedRules] = useState<Set<string>>(new Set());
   const [selectAll, setSelectAll] = useState(false);
+  const [isPlaidDialogOpen, setIsPlaidDialogOpen] = useState(false);
+  const [plaidLinkToken, setPlaidLinkToken] = useState<string | null>(null);
+  const [connectedAccounts, setConnectedAccounts] = useState<any[]>([]);
+  const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const [supabase, setSupabase] = useState<any>(null); // State to hold Supabase client
 
-  // Get the active tab from URL hash
   const getActiveTab = () => {
-    const hash = location.hash.slice(1); // Remove the #
+    const hash = location.hash.slice(1);
     if (hash === 'automations') return 'automations';
     if (hash === 'tax-settings') return 'tax-settings';
     return 'profile';
@@ -85,70 +96,177 @@ const Settings = () => {
 
   const [activeTab, setActiveTab] = useState(getActiveTab());
 
-  // Update local state when data is loaded
+  // Initialize Supabase client when component mounts
   useEffect(() => {
-    if (user) {
-      setUserInfo(prev => ({
-        ...prev,
-        email: user.email || "",
-      }));
+    const initSupabase = () => {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      if (supabaseUrl && supabaseKey) {
+        setSupabase(createClient(supabaseUrl, supabaseKey));
+      } else {
+        toast({
+          title: "Error",
+          description: "Supabase configuration is missing. Check environment variables.",
+          variant: "destructive",
+        });
+      }
+    };
+    initSupabase();
+  }, [toast]);
+
+  useEffect(() => {
+    const fetchConnectedAccounts = async () => {
+      if (!user || !supabase) return;
+      
+      setIsLoadingAccounts(true);
+      const { data, error } = await supabase
+        .from('connected_accounts')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to load connected accounts.",
+          variant: "destructive",
+        });
+      } else {
+        setConnectedAccounts(data || []);
+      }
+      setIsLoadingAccounts(false);
+    };
+
+    fetchConnectedAccounts();
+  }, [user, toast, supabase]);
+
+  const fetchPlaidLinkToken = useCallback(async (retryCount = 0) => {
+    const maxRetries = 3;
+    try {
+      if (!supabase) throw new Error("Supabase client not initialized");
+      const { data, error } = await supabase.functions.invoke('create_link_token', {
+        body: { user_id: user?.id },
+      });
+
+      if (error) throw error;
+
+      setPlaidLinkToken(data.link_token);
+    } catch (error) {
+      if (retryCount < maxRetries) {
+        await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
+        await fetchPlaidLinkToken(retryCount + 1);
+      } else {
+        toast({
+          title: "Error",
+          description: "Failed to initialize Plaid Link after multiple attempts. Check Supabase Edge Function setup or contact support.",
+          variant: "destructive",
+        });
+      }
     }
+  }, [toast, user?.id, supabase]);
+
+  const initializePlaidLink = useCallback(() => {
+    if (!plaidLinkToken || !window.Plaid) {
+      toast({
+        title: "Error",
+        description: "Plaid Link token or library not available. Please try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const plaid = window.Plaid.create({
+      token: plaidLinkToken,
+      onSuccess: (publicToken: string, metadata: any) => handlePlaidSuccess(publicToken, metadata),
+      onExit: (err: any, metadata: any) => {
+        if (err) {
+          toast({
+            title: "Error",
+            description: "Failed to connect account. Please try again.",
+            variant: "destructive",
+          });
+        }
+        setIsPlaidDialogOpen(false);
+      },
+      onEvent: (eventName: string, metadata: any) => console.log("Plaid Link Event:", eventName, metadata),
+    });
+
+    plaid.open();
+  }, [plaidLinkToken, toast]);
+
+  const handlePlaidSuccess = async (publicToken: string, metadata: any) => {
+    try {
+      if (!supabase) throw new Error("Supabase client not initialized");
+      const { data, error } = await supabase.functions.invoke('exchange_public_token', {
+        body: { public_token: publicToken, metadata },
+      });
+
+      if (error) throw error;
+
+      const { data: accounts, error: fetchError } = await supabase
+        .from('connected_accounts')
+        .select('*')
+        .eq('user_id', user?.id)
+        .order('created_at', { ascending: false });
+
+      if (fetchError) throw fetchError;
+
+      setConnectedAccounts(accounts || []);
+
+      setIsPlaidDialogOpen(false);
+
+      toast({
+        title: "Account Connected",
+        description: `Successfully connected ${metadata.institution.name} account.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to connect account.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (isPlaidDialogOpen) {
+      if (window.Plaid) {
+        fetchPlaidLinkToken();
+      } else {
+        const script = document.createElement("script");
+        script.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+        script.async = true;
+        script.onload = () => fetchPlaidLinkToken();
+        script.onerror = () => toast({
+          title: "Error",
+          description: "Failed to load Plaid library. Check network or CSP.",
+          variant: "destructive",
+        });
+        document.head.appendChild(script);
+      }
+    }
+
+    return () => setPlaidLinkToken(null);
+  }, [isPlaidDialogOpen, fetchPlaidLinkToken, toast]);
+
+  useEffect(() => {
+    if (user) setUserInfo(prev => ({ ...prev, email: user.email || "" }));
   }, [user]);
 
   useEffect(() => {
-    if (profile) {
-      setUserInfo(prev => ({
-        ...prev,
-        name: profile.name || "",
-      }));
-    }
+    if (profile) setUserInfo(prev => ({ ...prev, name: profile.name || "" }));
   }, [profile]);
 
   useEffect(() => {
-    if (taxSettings) {
-      setUserInfo(prev => ({
-        ...prev,
-        province: taxSettings.province === 'ON' ? 'ontario' : taxSettings.province,
-      }));
-    }
+    if (taxSettings) setUserInfo(prev => ({ ...prev, province: taxSettings.province === 'ON' ? 'ontario' : taxSettings.province }));
   }, [taxSettings]);
 
-  // Update tab when hash changes
-  useEffect(() => {
-    setActiveTab(getActiveTab());
-  }, [location.hash]);
-
-  const connectedAccounts = [
-    {
-      id: 1,
-      institution: "RBC Royal Bank",
-      accountType: "Business Chequing",
-      lastSync: "2024-06-15 10:30 AM",
-      status: "active",
-    },
-    {
-      id: 2,
-      institution: "TD Bank",
-      accountType: "Practice Account",
-      lastSync: "2024-06-15 10:28 AM",
-      status: "active",
-    },
-    {
-      id: 3,
-      institution: "RBC Royal Bank",
-      accountType: "Business Credit Card",
-      lastSync: "2024-06-15 10:25 AM",
-      status: "active",
-    },
-  ];
+  useEffect(() => setActiveTab(getActiveTab()), [location.hash]);
 
   const handleSaveProfile = async () => {
     try {
-      // Update profile (only name now, since other fields moved to Tax Settings)
       if (profile && userInfo.name !== profile.name) {
-        await updateProfile.mutateAsync({ 
-          name: userInfo.name,
-        });
+        await updateProfile.mutateAsync({ name: userInfo.name });
       }
 
       toast({
@@ -176,13 +294,7 @@ const Settings = () => {
 
     try {
       await createRule.mutateAsync(newRule);
-      setNewRule({
-        type: 'business_expense',
-        match_type: 'contains',
-        match_text: '',
-        category: '',
-        subcategory: ''
-      });
+      setNewRule({ type: 'business_expense', match_type: 'contains', match_text: '', category: '', subcategory: '' });
       setIsAddDialogOpen(false);
       toast({
         title: "Rule Added",
@@ -233,30 +345,17 @@ const Settings = () => {
     }
   };
 
-  const getAvailableCategories = (type: string) => {
-    return categoryMappings[type as keyof typeof categoryMappings]?.categories || [];
-  };
-
-  const getAvailableSubcategories = (type: string, category: string) => {
-    return categoryMappings[type as keyof typeof categoryMappings]?.subcategories[category] || [];
-  };
+  const getAvailableCategories = (type: string) => categoryMappings[type as keyof typeof categoryMappings]?.categories || [];
+  const getAvailableSubcategories = (type: string, category: string) => categoryMappings[type as keyof typeof categoryMappings]?.subcategories[category] || [];
 
   const handleSelectAll = (checked: boolean) => {
     setSelectAll(checked);
-    if (checked) {
-      setSelectedRules(new Set(rules.map(rule => rule.id)));
-    } else {
-      setSelectedRules(new Set());
-    }
+    setSelectedRules(checked ? new Set(rules.map(rule => rule.id)) : new Set());
   };
 
   const handleSelectRule = (ruleId: string, checked: boolean) => {
     const newSelected = new Set(selectedRules);
-    if (checked) {
-      newSelected.add(ruleId);
-    } else {
-      newSelected.delete(ruleId);
-    }
+    checked ? newSelected.add(ruleId) : newSelected.delete(ruleId);
     setSelectedRules(newSelected);
     setSelectAll(newSelected.size === rules.length && rules.length > 0);
   };
@@ -265,34 +364,24 @@ const Settings = () => {
     if (selectedRules.size === 0) return;
 
     try {
-      // Get selected rules
       const selectedRuleObjects = rules.filter(rule => selectedRules.has(rule.id));
-      
-      // Get uncategorized transactions (where no categorization has been done)
       const uncategorizedTransactions = transactions.filter(transaction => 
-        !transaction.expense_category && 
-        !transaction.expense_subcategory && 
-        !transaction.income_source
+        !transaction.expense_category && !transaction.expense_subcategory && !transaction.income_source
       );
 
       let updatedCount = 0;
 
-      // Apply each selected rule to matching transactions
       for (const transaction of uncategorizedTransactions) {
         if (!transaction.description) continue;
 
         const description = transaction.description.toLowerCase();
         
-        // Find the first matching rule (rules are processed in order)
         for (const rule of selectedRuleObjects) {
           const matchText = rule.match_text.toLowerCase();
           let isMatch = false;
 
-          if (rule.match_type === 'contains') {
-            isMatch = description.includes(matchText);
-          } else if (rule.match_type === 'equals') {
-            isMatch = description === matchText;
-          }
+          if (rule.match_type === 'contains') isMatch = description.includes(matchText);
+          else if (rule.match_type === 'equals') isMatch = description === matchText;
 
           if (isMatch) {
             const updates: any = {};
@@ -300,37 +389,29 @@ const Settings = () => {
             if (rule.type === 'business_expense') {
               updates.expense_type = 'business';
               updates.expense_category = rule.category;
-              if (rule.subcategory) {
-                updates.expense_subcategory = rule.subcategory;
-              }
+              if (rule.subcategory) updates.expense_subcategory = rule.subcategory;
             } else if (rule.type === 'personal_expense') {
               updates.expense_type = 'personal';
               updates.expense_category = rule.category;
-              if (rule.subcategory) {
-                updates.expense_subcategory = rule.subcategory;
-              }
+              if (rule.subcategory) updates.expense_subcategory = rule.subcategory;
             } else if (rule.type === 'business_income') {
               updates.income_source = rule.category;
             }
 
-            // Apply the update
             await updateTransaction.mutateAsync({ id: transaction.id, updates });
             updatedCount++;
-            break; // Stop after first match
+            break;
           }
         }
       }
 
-      // Show success toast
       toast({
         title: "Rules Applied Successfully",
         description: `Updated ${updatedCount} transaction${updatedCount !== 1 ? 's' : ''} using ${selectedRules.size} selected rule${selectedRules.size !== 1 ? 's' : ''}.`,
       });
 
-      // Clear selection
       setSelectedRules(new Set());
       setSelectAll(false);
-
     } catch (error) {
       toast({
         title: "Error",
@@ -356,11 +437,8 @@ const Settings = () => {
           <TabsTrigger value="automations">Automations</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="profile" className="space-y-6"
-        >
-
+        <TabsContent value="profile" className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* User Profile */}
             <Card className="border-blue-200">
               <CardHeader>
                 <CardTitle className="text-blue-900 flex items-center gap-2">
@@ -418,7 +496,6 @@ const Settings = () => {
               </CardContent>
             </Card>
 
-            {/* Connected Accounts */}
             <Card className="border-teal-200">
               <CardHeader>
                 <CardTitle className="text-teal-900 flex items-center gap-2">
@@ -427,29 +504,73 @@ const Settings = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
-                {connectedAccounts.map((account) => (
-                  <div key={account.id} className="border border-gray-200 rounded-lg p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <div>
-                        <h4 className="font-medium text-gray-900">{account.institution}</h4>
-                        <p className="text-sm text-gray-600">{account.accountType}</p>
-                      </div>
-                      <Badge className="bg-green-100 text-green-800">
-                        {account.status}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-gray-500">Last sync: {account.lastSync}</p>
+                {isLoadingAccounts ? (
+                  <div className="text-center py-4">
+                    <Loader2 className="h-6 w-6 mx-auto animate-spin text-teal-600" />
+                    <p className="text-sm text-gray-600 mt-2">Loading accounts...</p>
                   </div>
-                ))}
+                ) : connectedAccounts.length === 0 ? (
+                  <div className="text-center py-4 text-gray-600">
+                    <p>No connected accounts yet.</p>
+                  </div>
+                ) : (
+                  connectedAccounts.map((account) => (
+                    <div key={account.id} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <h4 className="font-medium text-gray-900">{account.institution}</h4>
+                          <p className="text-sm text-gray-600">{account.account_type}</p>
+                        </div>
+                        <Badge className="bg-green-100 text-green-800">
+                          {account.status}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-gray-500">Last sync: {new Date(account.last_sync).toLocaleString()}</p>
+                    </div>
+                  ))
+                )}
                 
-                <Button variant="outline" className="w-full border-teal-300 text-teal-600 hover:bg-teal-50">
-                  <CreditCard className="h-4 w-4 mr-2" />
-                  Add New Account
-                </Button>
+                <Dialog open={isPlaidDialogOpen} onOpenChange={setIsPlaidDialogOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" className="w-full border-teal-300 text-teal-600 hover:bg-teal-50">
+                      <CreditCard className="h-4 w-4 mr-2" />
+                      Add New Account
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-[525px]">
+                    <DialogHeader>
+                      <DialogTitle>Connect a Bank Account</DialogTitle>
+                      <DialogDescription>
+                        Securely connect your bank account using Plaid to access financial data and transactions.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="py-4">
+                      <Button 
+                        className="w-full bg-teal-600 hover:bg-teal-700"
+                        onClick={initializePlaidLink}
+                        disabled={!plaidLinkToken || !window.Plaid}
+                      >
+                        {plaidLinkToken && window.Plaid ? "Connect with Plaid" : "Loading Plaid..."}
+                      </Button>
+                    </div>
+                    <DialogFooter>
+                      <p className="text-xs text-gray-500">
+                        By connecting, you agree to Plaid's{' '}
+                        <a 
+                          href="https://plaid.com/legal/#end-user-privacy-policy" 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="underline"
+                        >
+                          Privacy Policy
+                        </a>.
+                      </p>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </CardContent>
             </Card>
           </div>
-
         </TabsContent>
 
         <TabsContent value="tax-settings" className="space-y-6">
@@ -484,71 +605,71 @@ const Settings = () => {
                         Create a rule to automatically categorize transactions based on their description.
                       </DialogDescription>
                     </DialogHeader>
-                     <div className="grid gap-4 py-4">
-                       <div className="grid grid-cols-4 items-center gap-4">
-                         <Label htmlFor="match_text" className="text-right">Transaction Description</Label>
-                         <Input
-                           id="match_text"
-                           value={newRule.match_text}
-                           onChange={(e) => setNewRule(prev => ({ ...prev, match_text: e.target.value }))}
-                           className="col-span-3"
-                           placeholder="e.g., Tim Hortons, Gas Station"
-                         />
-                       </div>
-                       <div className="grid grid-cols-4 items-center gap-4">
-                         <Label htmlFor="match_type" className="text-right">Match Type</Label>
-                         <Select value={newRule.match_type} onValueChange={(value: any) => setNewRule(prev => ({ ...prev, match_type: value }))}>
-                           <SelectTrigger className="col-span-3">
-                             <SelectValue />
-                           </SelectTrigger>
-                           <SelectContent>
-                             <SelectItem value="contains">Contains</SelectItem>
-                             <SelectItem value="equals">Equals</SelectItem>
-                           </SelectContent>
-                         </Select>
-                       </div>
-                       <div className="grid grid-cols-4 items-center gap-4">
-                         <Label htmlFor="type" className="text-right">Type</Label>
-                         <Select value={newRule.type} onValueChange={(value: any) => setNewRule(prev => ({ ...prev, type: value, category: '', subcategory: '' }))}>
-                           <SelectTrigger className="col-span-3">
-                             <SelectValue />
-                           </SelectTrigger>
-                           <SelectContent>
-                             <SelectItem value="business_income">Business Income</SelectItem>
-                             <SelectItem value="business_expense">Business Expense</SelectItem>
-                             <SelectItem value="personal_expense">Personal Expense</SelectItem>
-                           </SelectContent>
-                         </Select>
-                       </div>
-                       <div className="grid grid-cols-4 items-center gap-4">
-                         <Label htmlFor="category" className="text-right">Category</Label>
-                         <Select value={newRule.category} onValueChange={(value) => setNewRule(prev => ({ ...prev, category: value, subcategory: '' }))}>
-                           <SelectTrigger className="col-span-3">
-                             <SelectValue />
-                           </SelectTrigger>
-                           <SelectContent>
-                             {getAvailableCategories(newRule.type).map(cat => (
-                               <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-                             ))}
-                           </SelectContent>
-                         </Select>
-                       </div>
-                        {((newRule.type === 'business_expense') || (newRule.type === 'personal_expense' && newRule.category !== 'Personal')) && getAvailableSubcategories(newRule.type, newRule.category).length > 0 && (
-                         <div className="grid grid-cols-4 items-center gap-4">
-                           <Label htmlFor="subcategory" className="text-right">Subcategory</Label>
-                           <Select value={newRule.subcategory} onValueChange={(value) => setNewRule(prev => ({ ...prev, subcategory: value }))}>
-                             <SelectTrigger className="col-span-3">
-                               <SelectValue placeholder="Select subcategory (optional)" />
-                             </SelectTrigger>
-                             <SelectContent>
-                               {getAvailableSubcategories(newRule.type, newRule.category).map(subcat => (
-                                 <SelectItem key={subcat} value={subcat}>{subcat}</SelectItem>
-                               ))}
-                             </SelectContent>
-                           </Select>
-                         </div>
-                       )}
-                     </div>
+                    <div className="grid gap-4 py-4">
+                      <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="match_text" className="text-right">Transaction Description</Label>
+                        <Input
+                          id="match_text"
+                          value={newRule.match_text}
+                          onChange={(e) => setNewRule(prev => ({ ...prev, match_text: e.target.value }))}
+                          className="col-span-3"
+                          placeholder="e.g., Tim Hortons, Gas Station"
+                        />
+                      </div>
+                      <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="match_type" className="text-right">Match Type</Label>
+                        <Select value={newRule.match_type} onValueChange={(value: any) => setNewRule(prev => ({ ...prev, match_type: value }))}>
+                          <SelectTrigger className="col-span-3">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="contains">Contains</SelectItem>
+                            <SelectItem value="equals">Equals</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="type" className="text-right">Type</Label>
+                        <Select value={newRule.type} onValueChange={(value: any) => setNewRule(prev => ({ ...prev, type: value, category: '', subcategory: '' }))}>
+                          <SelectTrigger className="col-span-3">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="business_income">Business Income</SelectItem>
+                            <SelectItem value="business_expense">Business Expense</SelectItem>
+                            <SelectItem value="personal_expense">Personal Expense</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid grid-cols-4 items-center gap-4">
+                        <Label htmlFor="category" className="text-right">Category</Label>
+                        <Select value={newRule.category} onValueChange={(value) => setNewRule(prev => ({ ...prev, category: value, subcategory: '' }))}>
+                          <SelectTrigger className="col-span-3">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {getAvailableCategories(newRule.type).map(cat => (
+                              <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {((newRule.type === 'business_expense') || (newRule.type === 'personal_expense' && newRule.category !== 'Personal')) && getAvailableSubcategories(newRule.type, newRule.category).length > 0 && (
+                        <div className="grid grid-cols-4 items-center gap-4">
+                          <Label htmlFor="subcategory" className="text-right">Subcategory</Label>
+                          <Select value={newRule.subcategory} onValueChange={(value) => setNewRule(prev => ({ ...prev, subcategory: value }))}>
+                            <SelectTrigger className="col-span-3">
+                              <SelectValue placeholder="Select subcategory (optional)" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {getAvailableSubcategories(newRule.type, newRule.category).map(subcat => (
+                                <SelectItem key={subcat} value={subcat}>{subcat}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </div>
                     <DialogFooter>
                       <Button type="submit" onClick={handleAddRule} disabled={createRule.isPending}>
                         {createRule.isPending ? "Creating..." : "Create Rule"}
