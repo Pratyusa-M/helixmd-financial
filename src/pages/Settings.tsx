@@ -9,7 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
-import { User, CreditCard, Save, Info, Settings2, Plus, Edit2, Trash2, Loader2, RefreshCcw } from "lucide-react";
+import { User, CreditCard, Save, Info, Settings2, Plus, Edit2, Trash2, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useProfile } from "@/hooks/useProfile";
 import { useTaxSettings } from "@/hooks/useTaxSettings";
@@ -85,9 +85,10 @@ const Settings = () => {
   const [plaidLinkToken, setPlaidLinkToken] = useState<string | null>(null);
   const [connectedAccounts, setConnectedAccounts] = useState<any[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
-  const [supabase, setSupabase] = useState<any>(null); // State to hold Supabase client
+  const [supabase, setSupabase] = useState<any>(null);
   const [updateAccessToken, setUpdateAccessToken] = useState<string | null>(null);
   const [accountSettings, setAccountSettings] = useState<{ [key: string]: { start_date: string } }>({});
+  const [isFetchingTransactions, setIsFetchingTransactions] = useState<{ [key: string]: boolean }>({});
 
   const getActiveTab = () => {
     const hash = location.hash.slice(1);
@@ -231,7 +232,7 @@ const Settings = () => {
 
       toast({
         title: "Account Connected",
-        description: `Successfully ${updateAccessToken ? 'reconnected' : 'connected'} ${metadata.institution.name} account.`,
+        description: `Successfully connected ${metadata.institution.name} account.`,
       });
     } catch (error) {
       toast({
@@ -242,9 +243,49 @@ const Settings = () => {
     }
   };
 
-  const handleReconnect = (accessToken: string) => {
-    setUpdateAccessToken(accessToken);
-    setIsPlaidDialogOpen(true);
+  const handleFetchTransactions = async (accountId: string) => {
+    try {
+      setIsFetchingTransactions(prev => ({ ...prev, [accountId]: true }));
+      if (!supabase) throw new Error("Supabase client not initialized");
+
+      const startDate = accountSettings[accountId]?.start_date || '2025-01-01';
+      const endDate = new Date().toISOString().slice(0, 10);
+
+      const { data, error } = await supabase.functions.invoke('fetch_plaid_transactions', {
+        body: { accountId, startDate, endDate },
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: `Successfully fetched ${data.count} transactions.`,
+      });
+
+      // Refresh accounts
+      const { data: accounts, error: fetchError } = await supabase
+        .from('connected_accounts')
+        .select('*')
+        .eq('user_id', user?.id)
+        .order('created_at', { ascending: false });
+
+      if (fetchError) throw fetchError;
+
+      setConnectedAccounts(accounts || []);
+      setAccountSettings(
+        Object.fromEntries(
+          (accounts || []).map(acc => [acc.id, { start_date: acc.start_date ? new Date(acc.start_date).toISOString().slice(0, 10) : '2025-01-01' }])
+        )
+      );
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to fetch transactions.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsFetchingTransactions(prev => ({ ...prev, [accountId]: false }));
+    }
   };
 
   useEffect(() => {
@@ -607,11 +648,12 @@ const Settings = () => {
                           </Button>
                           <Button 
                             variant="outline"
-                            onClick={() => handleReconnect(account.access_token)}
+                            onClick={() => handleFetchTransactions(account.id)}
                             className="flex-1"
+                            disabled={isFetchingTransactions[account.id]}
                           >
-                            <RefreshCcw className="h-4 w-4 mr-2" />
-                            Reconnect
+                            <Loader2 className={`h-4 w-4 mr-2 ${isFetchingTransactions[account.id] ? 'animate-spin' : 'hidden'}`} />
+                            {isFetchingTransactions[account.id] ? 'Fetching...' : 'Fetch Transactions'}
                           </Button>
                         </div>
                       </div>
@@ -631,9 +673,9 @@ const Settings = () => {
                   </DialogTrigger>
                   <DialogContent className="sm:max-w-[525px]">
                     <DialogHeader>
-                      <DialogTitle>{updateAccessToken ? 'Reconnect Account' : 'Connect a Bank Account'}</DialogTitle>
+                      <DialogTitle>Connect a Bank Account</DialogTitle>
                       <DialogDescription>
-                        Securely {updateAccessToken ? 'reconnect' : 'connect'} your bank account using Plaid to access financial data and transactions.
+                        Securely connect your bank account using Plaid to access financial data and transactions.
                       </DialogDescription>
                     </DialogHeader>
                     <div className="py-4">
