@@ -625,7 +625,7 @@ const Settings = () => {
                         </Badge>
                       </div>
                       <p className="text-xs text-gray-500">Last sync: {new Date(account.last_sync).toLocaleString()}</p>
-                      <div className="mt-4 space-y-2">
+                      {/* <div className="mt-4 space-y-2">
                         <div>
                           <Label htmlFor={`start-date-${account.id}`}>Start Date</Label>
                           <Input
@@ -656,7 +656,7 @@ const Settings = () => {
                             {isFetchingTransactions[account.id] ? 'Fetching...' : 'Fetch Transactions'}
                           </Button>
                         </div>
-                      </div>
+                      </div> */}
                     </div>
                   ))
                 )}

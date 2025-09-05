@@ -50,9 +50,9 @@ serve(async (req)=>{
       headers: corsHeaders
     });
   }
-  const { accountId, startDate, endDate } = body;
-  if (!accountId || !startDate || !endDate) {
-    return new Response("Missing accountId, startDate, or endDate", {
+  const { accountId: connectedAccountId } = body;
+  if (!connectedAccountId) {
+    return new Response("Missing accountId", {
       status: 400,
       headers: corsHeaders
     });
@@ -87,50 +87,102 @@ serve(async (req)=>{
   }
   try {
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const { data: account, error: accountError } = await supabaseAdmin.from("connected_accounts").select("access_token").eq("id", accountId).eq("user_id", userId).single();
-    if (accountError || !account) {
-      throw new Error("Account not found or unauthorized");
+    // Verify the connected account belongs to the user
+    const { data: connectedAccount, error: connectedAccountError } = await supabaseAdmin.from("connected_accounts").select("id, user_id, institution").eq("id", connectedAccountId).eq("user_id", userId).single();
+    if (connectedAccountError || !connectedAccount) {
+      throw new Error("Connected account not found or unauthorized");
     }
-    const response = await fetch(`${baseUrl}/transactions/get`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        client_id: PLAID_CLIENT_ID,
-        secret: PLAID_SECRET,
-        access_token: account.access_token,
-        start_date: startDate,
-        end_date: endDate,
-        options: {
-          count: 500,
-          offset: 0
+    // Get all Plaid accounts for the connected account
+    const { data: plaidAccounts, error: plaidAccountsError } = await supabaseAdmin.from("connected_plaid_accounts").select("id, plaid_account_id, access_token, next_cursor, account_name, account_type").eq("connected_account_id", connectedAccountId);
+    if (plaidAccountsError || !plaidAccounts?.length) {
+      throw new Error("No Plaid accounts found for this connected account");
+    }
+    let totalTransactions = 0;
+    const updatedCursors = {};
+    // Process transactions for each Plaid account
+    for (const plaidAccount of plaidAccounts){
+      let nextCursor = plaidAccount.next_cursor;
+      let hasMore = true;
+      while(hasMore){
+        const response = await fetch(`${baseUrl}/transactions/sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            client_id: PLAID_CLIENT_ID,
+            secret: PLAID_SECRET,
+            access_token: plaidAccount.access_token,
+            cursor: nextCursor,
+            options: {
+              include_personal_finance_category: true
+            }
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error_message || "Plaid API error");
         }
-      })
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error_message || "Plaid API error");
+        const { added, modified, removed, next_cursor } = data;
+        const transactionsToInsert = [
+          ...added,
+          ...modified
+        ].map((t)=>{
+          const matchingAccount = plaidAccounts.find((pa)=>pa.plaid_account_id === t.account_id);
+          if (!matchingAccount) {
+            console.warn(`No matching account found for transaction ${t.transaction_id}`);
+            return null;
+          }
+          return {
+            user_id: connectedAccount.user_id,
+            institution_name: connectedAccount.institution,
+            account_name: matchingAccount.account_name,
+            account_type: matchingAccount.account_type,
+            date: t.date,
+            description: t.name,
+            amount: t.amount * -1,
+            direction: t.amount > 0 ? "debit" : "credit",
+            plaid_raw: t,
+            plaid_transaction_id: t.transaction_id,
+            plaid_account_id: t.account_id,
+            plaid_category_raw: t.personal_finance_category ? [
+              t.personal_finance_category.primary,
+              t.personal_finance_category.detailed
+            ] : null,
+            plaid_pending: t.pending,
+            category_override: t.personal_finance_category ? t.personal_finance_category.detailed : null,
+            expense_category: t.category?.[0],
+            expense_subcategory: t.category?.[1]
+          };
+        }).filter((t)=>t !== null);
+        if (transactionsToInsert.length > 0) {
+          const { error: insertError } = await supabaseAdmin.from("transactions").upsert(transactionsToInsert, {
+            onConflict: "plaid_transaction_id"
+          });
+          if (insertError) throw insertError;
+        }
+        if (removed.length > 0) {
+          const { error: deleteError } = await supabaseAdmin.from("transactions").delete().in("plaid_transaction_id", removed.map((r)=>r.transaction_id));
+          if (deleteError) throw deleteError;
+        }
+        totalTransactions += transactionsToInsert.length + removed.length;
+        nextCursor = next_cursor;
+        hasMore = data.has_more;
+        updatedCursors[plaidAccount.id] = nextCursor;
+      }
+      // Update the next_cursor for the Plaid account
+      await supabaseAdmin.from("connected_plaid_accounts").update({
+        next_cursor: updatedCursors[plaidAccount.id],
+        last_sync: new Date().toISOString()
+      }).eq("id", plaidAccount.id);
     }
-    const transactions = data.transactions.map((tx)=>({
-        connected_account_id: accountId,
-        transaction_id: tx.transaction_id,
-        amount: tx.amount,
-        date: new Date(tx.date).toISOString(),
-        name: tx.name,
-        pending: tx.pending || false,
-        category: tx.category?.[0] || null,
-        subcategory: tx.category?.[1] || null,
-        transaction_type: tx.amount > 0 ? "credit" : "debit"
-      }));
-    const { error } = await supabaseAdmin.from("plaid_transactions").insert(transactions);
-    if (error) throw error;
+    // Update last_sync for the connected account
     await supabaseAdmin.from("connected_accounts").update({
       last_sync: new Date().toISOString()
-    }).eq("id", accountId);
+    }).eq("id", connectedAccountId);
     return new Response(JSON.stringify({
       success: true,
-      count: transactions.length
+      count: totalTransactions
     }), {
       status: 200,
       headers: {
@@ -141,7 +193,7 @@ serve(async (req)=>{
   } catch (error) {
     console.error("Error details:", error);
     return new Response(JSON.stringify({
-      error: error.message || "Failed to fetch transactions"
+      error: error.message || "Failed to sync transactions"
     }), {
       status: 500,
       headers: {

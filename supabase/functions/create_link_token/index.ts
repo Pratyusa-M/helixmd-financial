@@ -48,6 +48,7 @@ serve(async (req)=>{
     body = {};
   }
   const clientUserId = body.user_id || "unique-user-id"; // Fallback, will be replaced with auth
+  const accessToken = body.access_token;
   const plaidRequest = {
     client_id: PLAID_CLIENT_ID,
     secret: PLAID_SECRET,
@@ -56,14 +57,20 @@ serve(async (req)=>{
       client_user_id: clientUserId
     },
     products: [
-      "auth",
       "transactions"
     ],
     country_codes: [
       "CA"
     ],
-    language: "en"
+    language: "en",
+    transactions: {
+      days_requested: 730
+    },
+    webhook: "https://plaid.helixmd.ai/api/webhook"
   };
+  if (accessToken) {
+    plaidRequest.access_token = accessToken;
+  }
   try {
     const response = await fetch(`${baseUrl}/link/token/create`, {
       method: "POST",
