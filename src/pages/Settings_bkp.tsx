@@ -85,7 +85,10 @@ const Settings = () => {
   const [plaidLinkToken, setPlaidLinkToken] = useState<string | null>(null);
   const [connectedAccounts, setConnectedAccounts] = useState<any[]>([]);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
-  const [supabase, setSupabase] = useState<any>(null); // State to hold Supabase client
+  const [supabase, setSupabase] = useState<any>(null);
+  const [updateAccessToken, setUpdateAccessToken] = useState<string | null>(null);
+  const [accountSettings, setAccountSettings] = useState<{ [key: string]: { start_date: string } }>({});
+  const [isFetchingTransactions, setIsFetchingTransactions] = useState<{ [key: string]: boolean }>({});
 
   const getActiveTab = () => {
     const hash = location.hash.slice(1);
@@ -133,6 +136,11 @@ const Settings = () => {
         });
       } else {
         setConnectedAccounts(data || []);
+        setAccountSettings(
+          Object.fromEntries(
+            (data || []).map(acc => [acc.id, { start_date: acc.start_date ? new Date(acc.start_date).toISOString().slice(0, 10) : '2025-01-01' }])
+          )
+        );
       }
       setIsLoadingAccounts(false);
     };
@@ -140,12 +148,12 @@ const Settings = () => {
     fetchConnectedAccounts();
   }, [user, toast, supabase]);
 
-  const fetchPlaidLinkToken = useCallback(async (retryCount = 0) => {
+  const fetchPlaidLinkToken = useCallback(async (accessToken: string | undefined = undefined, retryCount = 0) => {
     const maxRetries = 3;
     try {
       if (!supabase) throw new Error("Supabase client not initialized");
       const { data, error } = await supabase.functions.invoke('create_link_token', {
-        body: { user_id: user?.id },
+        body: { user_id: user?.id, access_token: accessToken },
       });
 
       if (error) throw error;
@@ -154,7 +162,7 @@ const Settings = () => {
     } catch (error) {
       if (retryCount < maxRetries) {
         await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
-        await fetchPlaidLinkToken(retryCount + 1);
+        await fetchPlaidLinkToken(accessToken, retryCount + 1);
       } else {
         toast({
           title: "Error",
@@ -187,6 +195,7 @@ const Settings = () => {
           });
         }
         setIsPlaidDialogOpen(false);
+        setUpdateAccessToken(null);
       },
       onEvent: (eventName: string, metadata: any) => console.log("Plaid Link Event:", eventName, metadata),
     });
@@ -212,8 +221,14 @@ const Settings = () => {
       if (fetchError) throw fetchError;
 
       setConnectedAccounts(accounts || []);
+      setAccountSettings(
+        Object.fromEntries(
+          (accounts || []).map(acc => [acc.id, { start_date: acc.start_date ? new Date(acc.start_date).toISOString().slice(0, 10) : '2025-01-01' }])
+        )
+      );
 
       setIsPlaidDialogOpen(false);
+      setUpdateAccessToken(null);
 
       toast({
         title: "Account Connected",
@@ -228,15 +243,60 @@ const Settings = () => {
     }
   };
 
+  const handleFetchTransactions = async (accountId: string) => {
+    try {
+      setIsFetchingTransactions(prev => ({ ...prev, [accountId]: true }));
+      if (!supabase) throw new Error("Supabase client not initialized");
+
+      const startDate = accountSettings[accountId]?.start_date || '2025-01-01';
+      const endDate = new Date().toISOString().slice(0, 10);
+
+      const { data, error } = await supabase.functions.invoke('fetch_plaid_transactions', {
+        body: { accountId, startDate, endDate },
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: `Successfully fetched ${data.count} transactions.`,
+      });
+
+      // Refresh accounts
+      const { data: accounts, error: fetchError } = await supabase
+        .from('connected_accounts')
+        .select('*')
+        .eq('user_id', user?.id)
+        .order('created_at', { ascending: false });
+
+      if (fetchError) throw fetchError;
+
+      setConnectedAccounts(accounts || []);
+      setAccountSettings(
+        Object.fromEntries(
+          (accounts || []).map(acc => [acc.id, { start_date: acc.start_date ? new Date(acc.start_date).toISOString().slice(0, 10) : '2025-01-01' }])
+        )
+      );
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to fetch transactions.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsFetchingTransactions(prev => ({ ...prev, [accountId]: false }));
+    }
+  };
+
   useEffect(() => {
     if (isPlaidDialogOpen) {
       if (window.Plaid) {
-        fetchPlaidLinkToken();
+        fetchPlaidLinkToken(updateAccessToken);
       } else {
         const script = document.createElement("script");
         script.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
         script.async = true;
-        script.onload = () => fetchPlaidLinkToken();
+        script.onload = () => fetchPlaidLinkToken(updateAccessToken);
         script.onerror = () => toast({
           title: "Error",
           description: "Failed to load Plaid library. Check network or CSP.",
@@ -247,7 +307,7 @@ const Settings = () => {
     }
 
     return () => setPlaidLinkToken(null);
-  }, [isPlaidDialogOpen, fetchPlaidLinkToken, toast]);
+  }, [isPlaidDialogOpen, fetchPlaidLinkToken, toast, updateAccessToken]);
 
   useEffect(() => {
     if (user) setUserInfo(prev => ({ ...prev, email: user.email || "" }));
@@ -277,6 +337,45 @@ const Settings = () => {
       toast({
         title: "Error",
         description: "Failed to update profile settings.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSaveStartDate = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('connected_accounts')
+        .update({ start_date: accountSettings[id].start_date })
+        .eq('id', id)
+        .eq('user_id', user?.id);
+
+      if (error) throw error;
+
+      // Refresh accounts
+      const { data, error: fetchError } = await supabase
+        .from('connected_accounts')
+        .select('*')
+        .eq('user_id', user?.id)
+        .order('created_at', { ascending: false });
+
+      if (fetchError) throw fetchError;
+
+      setConnectedAccounts(data || []);
+      setAccountSettings(
+        Object.fromEntries(
+          (data || []).map(acc => [acc.id, { start_date: acc.start_date ? new Date(acc.start_date).toISOString().slice(0, 10) : '2025-01-01' }])
+        )
+      );
+
+      toast({
+        title: "Success",
+        description: "Start date updated successfully.",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update start date.",
         variant: "destructive",
       });
     }
@@ -526,13 +625,48 @@ const Settings = () => {
                         </Badge>
                       </div>
                       <p className="text-xs text-gray-500">Last sync: {new Date(account.last_sync).toLocaleString()}</p>
+                      {/* <div className="mt-4 space-y-2">
+                        <div>
+                          <Label htmlFor={`start-date-${account.id}`}>Start Date</Label>
+                          <Input
+                            id={`start-date-${account.id}`}
+                            type="date"
+                            value={accountSettings[account.id]?.start_date || ''}
+                            onChange={(e) => setAccountSettings(prev => ({
+                              ...prev,
+                              [account.id]: { start_date: e.target.value }
+                            }))}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button 
+                            onClick={() => handleSaveStartDate(account.id)}
+                            className="flex-1"
+                          >
+                            <Save className="h-4 w-4 mr-2" />
+                            Save Start Date
+                          </Button>
+                          <Button 
+                            variant="outline"
+                            onClick={() => handleFetchTransactions(account.id)}
+                            className="flex-1"
+                            disabled={isFetchingTransactions[account.id]}
+                          >
+                            <Loader2 className={`h-4 w-4 mr-2 ${isFetchingTransactions[account.id] ? 'animate-spin' : 'hidden'}`} />
+                            {isFetchingTransactions[account.id] ? 'Fetching...' : 'Fetch Transactions'}
+                          </Button>
+                        </div>
+                      </div> */}
                     </div>
                   ))
                 )}
                 
-                <Dialog open={isPlaidDialogOpen} onOpenChange={setIsPlaidDialogOpen}>
+                <Dialog open={isPlaidDialogOpen} onOpenChange={(open) => {
+                  setIsPlaidDialogOpen(open);
+                  if (!open) setUpdateAccessToken(null);
+                }}>
                   <DialogTrigger asChild>
-                    <Button variant="outline" className="w-full border-teal-300 text-teal-600 hover:bg-teal-50">
+                    <Button variant="outline" className="w-full border-teal-300 text-teal-600 hover:bg-teal-50" onClick={() => setUpdateAccessToken(null)}>
                       <CreditCard className="h-4 w-4 mr-2" />
                       Add New Account
                     </Button>

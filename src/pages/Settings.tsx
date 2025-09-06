@@ -89,6 +89,7 @@ const Settings = () => {
   const [updateAccessToken, setUpdateAccessToken] = useState<string | null>(null);
   const [accountSettings, setAccountSettings] = useState<{ [key: string]: { start_date: string } }>({});
   const [isFetchingTransactions, setIsFetchingTransactions] = useState<{ [key: string]: boolean }>({});
+  const [isConnecting, setIsConnecting] = useState(false); // New state for Plaid connection loading
 
   const getActiveTab = () => {
     const hash = location.hash.slice(1);
@@ -183,6 +184,7 @@ const Settings = () => {
       return;
     }
 
+    setIsConnecting(true); // Start loading
     const plaid = window.Plaid.create({
       token: plaidLinkToken,
       onSuccess: (publicToken: string, metadata: any) => handlePlaidSuccess(publicToken, metadata),
@@ -194,6 +196,7 @@ const Settings = () => {
             variant: "destructive",
           });
         }
+        setIsConnecting(false); // Stop loading on exit
         setIsPlaidDialogOpen(false);
         setUpdateAccessToken(null);
       },
@@ -229,6 +232,7 @@ const Settings = () => {
 
       setIsPlaidDialogOpen(false);
       setUpdateAccessToken(null);
+      setIsConnecting(false); // Stop loading on success
 
       toast({
         title: "Account Connected",
@@ -240,6 +244,7 @@ const Settings = () => {
         description: "Failed to connect account.",
         variant: "destructive",
       });
+      setIsConnecting(false); // Stop loading on error
     }
   };
 
@@ -625,45 +630,16 @@ const Settings = () => {
                         </Badge>
                       </div>
                       <p className="text-xs text-gray-500">Last sync: {new Date(account.last_sync).toLocaleString()}</p>
-                      {/* <div className="mt-4 space-y-2">
-                        <div>
-                          <Label htmlFor={`start-date-${account.id}`}>Start Date</Label>
-                          <Input
-                            id={`start-date-${account.id}`}
-                            type="date"
-                            value={accountSettings[account.id]?.start_date || ''}
-                            onChange={(e) => setAccountSettings(prev => ({
-                              ...prev,
-                              [account.id]: { start_date: e.target.value }
-                            }))}
-                          />
-                        </div>
-                        <div className="flex gap-2">
-                          <Button 
-                            onClick={() => handleSaveStartDate(account.id)}
-                            className="flex-1"
-                          >
-                            <Save className="h-4 w-4 mr-2" />
-                            Save Start Date
-                          </Button>
-                          <Button 
-                            variant="outline"
-                            onClick={() => handleFetchTransactions(account.id)}
-                            className="flex-1"
-                            disabled={isFetchingTransactions[account.id]}
-                          >
-                            <Loader2 className={`h-4 w-4 mr-2 ${isFetchingTransactions[account.id] ? 'animate-spin' : 'hidden'}`} />
-                            {isFetchingTransactions[account.id] ? 'Fetching...' : 'Fetch Transactions'}
-                          </Button>
-                        </div>
-                      </div> */}
                     </div>
                   ))
                 )}
                 
                 <Dialog open={isPlaidDialogOpen} onOpenChange={(open) => {
                   setIsPlaidDialogOpen(open);
-                  if (!open) setUpdateAccessToken(null);
+                  if (!open) {
+                    setUpdateAccessToken(null);
+                    setIsConnecting(false); // Reset loading state when closing
+                  }
                 }}>
                   <DialogTrigger asChild>
                     <Button variant="outline" className="w-full border-teal-300 text-teal-600 hover:bg-teal-50" onClick={() => setUpdateAccessToken(null)}>
@@ -679,13 +655,20 @@ const Settings = () => {
                       </DialogDescription>
                     </DialogHeader>
                     <div className="py-4">
-                      <Button 
-                        className="w-full bg-teal-600 hover:bg-teal-700"
-                        onClick={initializePlaidLink}
-                        disabled={!plaidLinkToken || !window.Plaid}
-                      >
-                        {plaidLinkToken && window.Plaid ? "Connect with Plaid" : "Loading Plaid..."}
-                      </Button>
+                      {isConnecting ? (
+                        <div className="flex flex-col items-center justify-center gap-2">
+                          <Loader2 className="h-8 w-8 animate-spin text-teal-600" />
+                          <p className="text-sm text-gray-600">Connecting to Plaid...</p>
+                        </div>
+                      ) : (
+                        <Button 
+                          className="w-full bg-teal-600 hover:bg-teal-700"
+                          onClick={initializePlaidLink}
+                          disabled={!plaidLinkToken || !window.Plaid}
+                        >
+                          {plaidLinkToken && window.Plaid ? "Connect with Plaid" : "Loading Plaid..."}
+                        </Button>
+                      )}
                     </div>
                     <DialogFooter>
                       <p className="text-xs text-gray-500">
