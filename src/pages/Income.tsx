@@ -1,4 +1,3 @@
-
 import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -48,6 +47,12 @@ const Income = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [existingRules, setExistingRules] = useState<Set<string>>(new Set());
 
+  // Debug logging for fiscal year and transactions
+  useEffect(() => {
+    console.log('Fiscal Year Context:', { selectedYear, fiscalStartDate, fiscalEndDate });
+    console.log('Raw incomeTransactions:', incomeTransactions);
+  }, [selectedYear, fiscalStartDate, fiscalEndDate, incomeTransactions]);
+
   // Update date range when fiscal year changes
   useEffect(() => {
     setStartDate(fiscalStartDate);
@@ -64,26 +69,26 @@ const Income = () => {
 
   // Apply date, source, and search filtering based on user selection
   const filteredTransactions = useMemo(() => {
-    return incomeTransactions.filter(transaction => {
+    const filtered = incomeTransactions.filter(transaction => {
       const transactionDate = new Date(transaction.date);
       const start = new Date(startDate);
       const end = new Date(endDate);
       const withinDateRange = transactionDate >= start && transactionDate <= end;
       
-      // Filter by source - handle 'uncategorized' filter
       const sourceMatch = selectedSource === 'all' || 
                          (selectedSource === 'uncategorized' && (!transaction.income_source || transaction.income_source === 'uncategorized' as any)) ||
                          transaction.income_source === selectedSource;
       
-      // Filter by search query (description)
       const searchMatch = searchQuery === '' || 
         transaction.description?.toLowerCase().includes(searchQuery.toLowerCase());
       
       return withinDateRange && sourceMatch && searchMatch;
     });
+    console.log('Filtered income transactions:', filtered);
+    return filtered;
   }, [incomeTransactions, startDate, endDate, selectedSource, searchQuery]);
 
-  // Calculate total business income (business_income category, excluding uncategorized and other)
+  // Calculate total business income and total income
   const totalBusinessIncome = filteredTransactions
     .filter(transaction => transaction.category_override === 'business_income')
     .reduce((sum, transaction) => sum + transaction.amount, 0);
@@ -110,7 +115,6 @@ const Income = () => {
     try {
       const updates: any = { category_override: newCategory };
       
-      // If category is set to "other_income", "uncategorized", or "Internal Transfer", clear the income_source
       if (newCategory === 'other_income' || newCategory === 'uncategorized' || newCategory === 'Internal Transfer') {
         updates.income_source = null;
       }
@@ -134,23 +138,12 @@ const Income = () => {
         variant: "destructive",
       });
     }
-    console.log('=== END CATEGORY CHANGE DEBUG ===');
   };
 
   const handleSourceChange = async (transactionId: string, newSource: string | null) => {
-    console.log('=== SOURCE CHANGE DEBUG ===');
-    console.log('handleSourceChange called with:', { transactionId, newSource });
-    
+    console.log('handleSourceChange:', { transactionId, newSource });
     try {
-      // Find the current transaction to check category
       const currentTransaction = filteredTransactions.find(t => t.id === transactionId);
-      console.log('Current transaction before update:', {
-        id: currentTransaction?.id,
-        category_override: currentTransaction?.category_override,
-        income_source: currentTransaction?.income_source
-      });
-      
-      // Prevent setting source if category is null or uncategorized
       if (currentTransaction && (currentTransaction.category_override === null || currentTransaction.category_override === ('uncategorized' as any))) {
         toast({
           title: "Cannot Set Source",
@@ -161,24 +154,14 @@ const Income = () => {
       }
       
       const updates: any = { income_source: newSource };
-      
-      // If category_override is null, set it to 'business_income' to match UI default
       if (currentTransaction && currentTransaction.category_override === null) {
         updates.category_override = 'business_income';
-        console.log('🔄 Auto-setting category_override to "business_income" because it was null');
       }
-      
-      console.log('Updates being sent to database:', updates);
       
       const result = await updateTransaction.mutateAsync({
         id: transactionId,
         updates
       });
-      
-      console.log('✅ Source update SUCCESS - Database result:', result);
-      console.log('- Transaction ID:', result.id);
-      console.log('- New income_source in DB:', result.income_source);
-      console.log('- Final category_override in DB:', result.category_override);
       
       toast({
         title: "Source Updated",
@@ -194,7 +177,6 @@ const Income = () => {
         variant: "destructive",
       });
     }
-    console.log('=== END SOURCE CHANGE DEBUG ===');
   };
 
   const { deleteRule } = useCategorization();
@@ -202,9 +184,7 @@ const Income = () => {
 
   const handleAutoTagChange = async (transactionId: string, checked: boolean, transaction: any) => {
     if (checked) {
-      // Handle checking - create rule and apply to historical transactions
       try {
-        // Create auto-categorization rule for this transaction
         const { data: newRule, error } = await supabase
           .from('transaction_categorization_rules')
           .insert({
@@ -220,23 +200,19 @@ const Income = () => {
 
         if (error) throw error;
 
-        // Add the new rule to our existing rules set
         setExistingRules(prev => new Set([...prev, transaction.description]));
 
-        // Show initial success message
         sonnerToast("✅ Auto-tag rule created. Applying to historical transactions...", {
           position: "bottom-left",
           duration: 2000,
         });
 
-        // Apply the new rule to historical transactions
         try {
           const result = await applyRules.mutateAsync({ 
             rules: [newRule], 
             lookbackDays: 365 
           });
 
-          // Show final success message with counts
           sonnerToast(`Auto-tag rule created and applied to ${result.updatedCount} past transaction${result.updatedCount !== 1 ? 's' : ''}`, {
             position: "bottom-left",
             duration: 4000,
@@ -257,9 +233,7 @@ const Income = () => {
         });
       }
     } else {
-      // Handle unchecking - delete rule
       try {
-        // Find the rule to delete based on match_text (description)
         const { data: existingRule, error: findError } = await supabase
           .from('transaction_categorization_rules')
           .select('id')
@@ -285,7 +259,6 @@ const Income = () => {
 
             if (deleteError) throw deleteError;
 
-            // Remove from our existing rules set
             setExistingRules(prev => {
               const newSet = new Set(prev);
               newSet.delete(transaction.description);
@@ -297,8 +270,6 @@ const Income = () => {
               duration: 3000,
             });
           } else {
-            // If user cancels, restore the checkbox to checked state
-            // Force re-check by manually updating the UI state
             checkExistingRules();
           }
         }
@@ -312,7 +283,6 @@ const Income = () => {
     }
   };
 
-  // Check for existing auto-categorization rules
   const checkExistingRules = async () => {
     if (!user?.id || !incomeTransactions?.length) return;
 
@@ -336,14 +306,11 @@ const Income = () => {
     }
   };
 
-  // Sync UI defaults with database values on load
   const syncDisplayedValuesWithDatabase = async () => {
     if (!incomeTransactions?.length || !user?.id) return;
 
     const transactionsToUpdate = incomeTransactions.filter(transaction => {
-      // Only sync category_override if it's null (don't auto-set source anymore)
       const needsCategorySync = transaction.category_override === null;
-      
       return needsCategorySync;
     });
 
@@ -351,14 +318,11 @@ const Income = () => {
 
     console.log('🔄 [DB SYNC] Syncing UI defaults with database for', transactionsToUpdate.length, 'transactions');
 
-    // Update transactions to ensure complete data
     for (const transaction of transactionsToUpdate) {
       const updates: any = {};
       
       if (transaction.category_override === null) {
         updates.category_override = 'business_income';
-        console.log('📝 [DB SYNC] Auto-setting category_override to "business_income" for transaction:', transaction.id);
-        // Don't auto-set income_source anymore - let user choose explicitly
       }
       
       if (Object.keys(updates).length > 0) {
@@ -367,7 +331,6 @@ const Income = () => {
             id: transaction.id,
             updates
           });
-          console.log('✅ [DB SYNC] Successfully synced transaction:', transaction.id, updates);
         } catch (error) {
           console.error('❌ [DB SYNC] Failed to sync transaction:', transaction.id, error);
         }
@@ -409,7 +372,6 @@ const Income = () => {
         </Button>
       </div>
 
-      {/* Income Summary by Source */}
       <Card className="border-green-200">
         <CardHeader>
           <CardTitle className="text-green-900">Income Summary by Source</CardTitle>
@@ -419,7 +381,6 @@ const Income = () => {
         </CardHeader>
         <CardContent>
           {(() => {
-            // Group transactions by income_source and calculate totals
             const sourceGroups = filteredTransactions.reduce((acc, transaction) => {
               const source = (transaction.income_source as any) === 'uncategorized' || !transaction.income_source ? 'Uncategorized' : transaction.income_source;
               if (!acc[source]) {
@@ -429,7 +390,6 @@ const Income = () => {
               return acc;
             }, {} as Record<string, number>);
 
-            // Sort sources by amount (highest first)
             const sortedSources = Object.entries(sourceGroups).sort(([,a], [,b]) => b - a);
 
             return (
@@ -456,8 +416,6 @@ const Income = () => {
         </CardContent>
       </Card>
 
-
-      {/* Filters */}
       <Card className="border-blue-200">
         <CardHeader>
           <CardTitle className="text-blue-900 flex items-center justify-between">
@@ -530,7 +488,6 @@ const Income = () => {
         </CardContent>
       </Card>
 
-      {/* Transactions Table */}
       <Card className="border-blue-200">
         <CardHeader>
           <CardTitle className="text-blue-900">Income Transactions</CardTitle>
@@ -539,7 +496,6 @@ const Income = () => {
           </p>
         </CardHeader>
         <CardContent>
-          {/* Search Bar */}
           <div className="mb-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
@@ -573,71 +529,52 @@ const Income = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredTransactions.map((transaction, index) => {
-                    const normalizedCategory = typeof transaction.category_override === 'string'
-                      ? transaction.category_override.trim()
-                      : (transaction.category_override as any)?.label?.trim() || '';
-
-                    const normalizedSource = typeof transaction.income_source === 'string'
-                      ? transaction.income_source.trim()
-                      : (transaction.income_source as any)?.label?.trim() || '';
-
-                    // Check actual database values, enable only for business income with valid source (not uncategorized)
+                  {filteredTransactions.map((transaction) => {
                     const shouldBeEnabled = transaction.category_override === 'business_income' && 
                                           transaction.income_source && 
                                           (transaction.income_source as any) !== 'uncategorized';
-                    
-                    // Debug logging for verification
-                    console.log({
-                      index,
-                      id: transaction.id,
-                      description: transaction.description,
-                      category_override: transaction.category_override,
-                      income_source: transaction.income_source,
-                      shouldBeEnabled
-                    });
                     return (
-                    <TableRow key={transaction.id} className="hover:bg-blue-50">
-                      <TableCell className="font-medium">
-                        {new Date(transaction.date).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell>{transaction.institution_name}</TableCell>
-                      <TableCell>{transaction.account_name}</TableCell>
-                      <TableCell>{highlightText(transaction.description || '', searchQuery)}</TableCell>
-                      <TableCell className="capitalize">{transaction.account_type}</TableCell>
+                      <TableRow key={transaction.id} className="hover:bg-blue-50">
+                        <TableCell className="font-medium">
+                          {new Date(transaction.date).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell>{transaction.institution_name}</TableCell>
+                        <TableCell>{transaction.account_name}</TableCell>
+                        <TableCell>{highlightText(transaction.description || '', searchQuery)}</TableCell>
+                        <TableCell className="capitalize">{transaction.account_type}</TableCell>
                         <TableCell>
-                            <Select
-                              value={transaction.category_override === null ? 'uncategorized' : transaction.category_override}
-                              onValueChange={(value: 'business_income' | 'other_income' | 'uncategorized' | 'Internal Transfer') => 
-                                handleCategoryChange(transaction.id, value)
+                          <Select
+                            value={transaction.category_override === null ? 'uncategorized' : transaction.category_override}
+                            onValueChange={(value: 'business_income' | 'other_income' | 'uncategorized' | 'Internal Transfer') => 
+                              handleCategoryChange(transaction.id, value)
+                            }
+                          >
+                            <SelectTrigger className={`min-w-[260px] justify-between text-ellipsis whitespace-nowrap overflow-hidden ${!transaction.category_override ? 'text-center' : 'text-left pl-3'}`}>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="z-50 bg-white border border-gray-200 shadow-lg">
+                              <SelectItem value="uncategorized" className="text-center">--</SelectItem>
+                              <SelectItem value="business_income">Business Income</SelectItem>
+                              <SelectItem value="other_income">Other</SelectItem>
+                              <SelectItem value="Internal Transfer">Internal Transfer</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          {transaction.category_override !== 'business_income' ? (
+                            <span className="text-gray-400 pl-3">
+                              {transaction.category_override === 'other_income' 
+                                ? 'Not applicable for Other income'
+                                : transaction.category_override === 'Internal Transfer'
+                                ? 'Not applicable for Internal Transfer'
+                                : 'Select category first'
                               }
-                            >
-                              <SelectTrigger className={`min-w-[260px] justify-between text-ellipsis whitespace-nowrap overflow-hidden ${!transaction.category_override ? 'text-center' : 'text-left pl-3'}`}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent className="z-50 bg-white border border-gray-200 shadow-lg">
-                                 <SelectItem value="uncategorized" className="text-center">--</SelectItem>
-                                <SelectItem value="business_income">Business Income</SelectItem>
-                                <SelectItem value="other_income">Other</SelectItem>
-                                <SelectItem value="Internal Transfer">Internal Transfer</SelectItem>
-                              </SelectContent>
-                            </Select>
-                         </TableCell>
-                         <TableCell>
-                           {transaction.category_override !== 'business_income' ? (
-                             <span className="text-gray-400 pl-3">
-                               {transaction.category_override === 'other_income' 
-                                 ? 'Not applicable for Other income'
-                                 : transaction.category_override === 'Internal Transfer'
-                                 ? 'Not applicable for Internal Transfer'
-                                 : 'Select category first'
-                               }
-                             </span>
-                           ) : (
+                            </span>
+                          ) : (
                             <Select
                               value={transaction.income_source === null ? "uncategorized" : transaction.income_source}
                               onValueChange={(value: string) => 
-                                handleSourceChange(transaction.id, value === "uncategorized" ? 'uncategorized' : value)
+                                handleSourceChange(transaction.id, value === "uncategorized" ? null : value)
                               }
                             >
                               <SelectTrigger className={`min-w-[260px] justify-between text-ellipsis whitespace-nowrap overflow-hidden ${!transaction.income_source ? 'text-center' : 'text-left pl-3'}`}>
@@ -658,38 +595,37 @@ const Income = () => {
                             </Select>
                           )}
                         </TableCell>
-                       <TableCell className="text-right font-semibold text-green-600">
-                         ${transaction.amount.toLocaleString()}
-                       </TableCell>
-                            <TableCell className="text-center">
-                              {shouldBeEnabled && (
-                                <TooltipProvider>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <div className="cursor-pointer">
-                                        <Checkbox
-                                          checked={existingRules.has(transaction.description)}
-                                          onCheckedChange={(checked) => handleAutoTagChange(transaction.id, !!checked, transaction)}
-                                        />
-                                      </div>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>Automatically tag similar transactions — uncheck to remove rule</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </TooltipProvider>
-                              )}
-                            </TableCell>
-                     </TableRow>
+                        <TableCell className="text-right font-semibold text-green-600">
+                          ${transaction.amount.toLocaleString()}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {shouldBeEnabled && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div className="cursor-pointer">
+                                    <Checkbox
+                                      checked={existingRules.has(transaction.description)}
+                                      onCheckedChange={(checked) => handleAutoTagChange(transaction.id, !!checked, transaction)}
+                                    />
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Automatically tag similar transactions — uncheck to remove rule</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          )}
+                        </TableCell>
+                      </TableRow>
                     );
-                   })}
+                  })}
                 </TableBody>
               </Table>
             </div>
           )}
         </CardContent>
       </Card>
-
     </div>
   );
 };

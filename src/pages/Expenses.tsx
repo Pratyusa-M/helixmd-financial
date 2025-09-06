@@ -1,4 +1,3 @@
-
 import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -58,7 +57,6 @@ const expenseCategories = {
 };
 
 const subcategories = {
-  // Business subcategories
   "CME": [
     "Books, Subscriptions, Journals",
     "Professional Development/CME",
@@ -93,8 +91,7 @@ const subcategories = {
     "Licensing Fees",
     "Finance/Lease Payment"
   ],
-  "Parking": [], // No subcategories for Parking
-  // Personal subcategories
+  "Parking": [],
   "Shared Business": [
     "Rent/Mortgage",
     "Hydro",
@@ -106,7 +103,7 @@ const subcategories = {
     "Cleaning Service",
     "Other"
   ],
-  "Personal": [] // No subcategories for Personal
+  "Personal": []
 };
 
 const Expenses = () => {
@@ -126,16 +123,16 @@ const Expenses = () => {
   const [endDate, setEndDate] = useState(fiscalEndDate);
   const [existingRules, setExistingRules] = useState<Set<string>>(new Set());
   
-  // Get business expenses total (unfiltered)
   const { data: businessExpensesData, isLoading: isLoadingBusinessTotal } = useBusinessExpensesTotal();
-  
-  // Get filter options
   const { categories, subcategoriesByCategory, isLoadingCategories } = useExpenseFilterOptions();
-  
-  // Get tax settings for calculating tax savings
   const { taxSettings } = useTaxSettings();
 
-  // Clear all filters function
+  // Debug logging
+  useEffect(() => {
+    console.log('Fiscal Year Context:', { selectedYear, fiscalStartDate, fiscalEndDate });
+    console.log('Raw transactions:', transactions);
+  }, [selectedYear, fiscalStartDate, fiscalEndDate, transactions]);
+
   const clearAllFilters = () => {
     setShowOnlyUncategorized(false);
     setFilterExpenseType('all');
@@ -146,13 +143,11 @@ const Expenses = () => {
     setEndDate(fiscalEndDate);
   };
 
-  // Update date range when fiscal year changes
   useEffect(() => {
     setStartDate(fiscalStartDate);
     setEndDate(fiscalEndDate);
   }, [fiscalStartDate, fiscalEndDate]);
   
-  // Check if using custom date range
   const isCustomRange = startDate !== fiscalStartDate || endDate !== fiscalEndDate;
 
   const handleResetToFiscalYear = () => {
@@ -160,7 +155,6 @@ const Expenses = () => {
     setEndDate(fiscalEndDate);
   };
   
-  // Calculate total income for tax rate estimation
   const totalIncome = useMemo(() => {
     return transactions?.filter(t => {
       const transactionDate = new Date(t.date);
@@ -183,19 +177,16 @@ const Expenses = () => {
   const personalAmount = taxSettings?.personal_tax_credit_amount || 15000;
   const { calculation, federalBrackets, ontarioBrackets } = useTaxCalculator(netIncome, personalAmount, 0);
   
-  // Calculate projected annual income and marginal tax rate
   const getMarginalTaxRate = (projectedIncome: number) => {
-    let marginalFederalRate = 0.15; // Default to lowest bracket
-    let marginalOntarioRate = 0.0505; // Default to lowest bracket
+    let marginalFederalRate = 0.15;
+    let marginalOntarioRate = 0.0505;
     
-    // Find federal marginal rate
     for (const bracket of federalBrackets) {
       if (projectedIncome > bracket.min) {
         marginalFederalRate = bracket.rate;
       }
     }
     
-    // Find Ontario marginal rate  
     for (const bracket of ontarioBrackets) {
       if (projectedIncome > bracket.min) {
         marginalOntarioRate = bracket.rate;
@@ -205,13 +196,10 @@ const Expenses = () => {
     return marginalFederalRate + marginalOntarioRate;
   };
   
-  // Calculate projected annual income based on YTD data
   const currentDate = new Date();
-  const monthsElapsed = currentDate.getMonth() + 1; // January = 1, December = 12
+  const monthsElapsed = currentDate.getMonth() + 1;
   const projectedAnnualIncome = monthsElapsed > 0 ? (totalIncome / monthsElapsed) * 12 : totalIncome;
 
-  
-  // Filter for debit transactions from relevant account types with all filters applied
   const expenseTransactions = useMemo(() => {
     let baseTransactions = transactions?.filter(t => {
       const transactionDate = new Date(t.date);
@@ -221,16 +209,15 @@ const Expenses = () => {
       return transactionDate >= start && 
              transactionDate <= end &&
              t.direction === 'debit' &&
-             ['chequing', 'savings', 'credit_card'].includes(t.account_type);
+             ['chequing', 'savings', 'credit_card', 'depository', 'credit'].includes(t.account_type);
     }) || [];
 
     console.log('🔍 FILTERED Transaction Query - Starting with base transactions:', {
       count: baseTransactions.length,
       year: selectedYear,
-      baseFilters: 'direction=debit, account_type in [chequing,savings,credit_card], date range'
+      baseFilters: 'direction=debit, account_type in [chequing,savings,credit_card,depository,credit], date range'
     });
 
-    // Apply uncategorized filter first
     if (showOnlyUncategorized) {
       const beforeCount = baseTransactions.length;
       baseTransactions = baseTransactions.filter(t => 
@@ -243,7 +230,6 @@ const Expenses = () => {
       });
     }
 
-    // Apply expense type filter
     if (filterExpenseType !== 'all') {
       const beforeCount = baseTransactions.length;
       if (filterExpenseType === 'uncategorized') {
@@ -258,7 +244,6 @@ const Expenses = () => {
       });
     }
 
-    // Apply category filter
     if (filterCategory !== '' && filterCategory !== 'all') {
       const beforeCount = baseTransactions.length;
       if (filterCategory === 'uncategorized') {
@@ -273,7 +258,6 @@ const Expenses = () => {
       });
     }
 
-    // Apply subcategory filter
     if (filterSubcategory !== '' && filterSubcategory !== 'all') {
       const beforeCount = baseTransactions.length;
       if (filterSubcategory === 'uncategorized') {
@@ -288,7 +272,6 @@ const Expenses = () => {
       });
     }
 
-    // Apply search filter
     if (searchQuery !== '') {
       const beforeCount = baseTransactions.length;
       baseTransactions = baseTransactions.filter(transaction => 
@@ -301,7 +284,7 @@ const Expenses = () => {
       });
     }
 
-    console.log('🎯 FINAL FILTERED RESULTS:', {
+    console.log('🎯 FINAL FILTERED EXPENSE TRANSACTIONS:', {
       totalTransactions: baseTransactions.length,
       appliedFilters: {
         showOnlyUncategorized,
@@ -325,7 +308,6 @@ const Expenses = () => {
     try {
       await updateTransaction.mutateAsync({ id, updates });
       
-      // Show tax savings toast if this is a business expense categorization
       if (updates.expense_subcategory && originalTransaction?.expense_type === 'business') {
         const expenseAmount = Math.abs(originalTransaction.amount);
         const marginalTaxRate = getMarginalTaxRate(projectedAnnualIncome);
@@ -393,12 +375,9 @@ const Expenses = () => {
 
   const handleAutoTagChange = async (transactionId: string, checked: boolean, transaction: any) => {
     if (checked) {
-      // Handle checking - create rule and apply to historical transactions
       try {
-        // Determine the rule type based on expense_type
         const ruleType = transaction.expense_type === 'business' ? 'business_expense' : 'personal_expense';
         
-        // Create auto-categorization rule for this transaction
         const { data: newRule, error } = await supabase
           .from('transaction_categorization_rules')
           .insert({
@@ -414,23 +393,19 @@ const Expenses = () => {
 
         if (error) throw error;
 
-        // Add the new rule to our existing rules set
         setExistingRules(prev => new Set([...prev, transaction.description]));
 
-        // Show initial success message
         toast("✅ Auto-tag rule created. Applying to historical transactions...", {
           position: "bottom-left",
           duration: 2000,
         });
 
-        // Apply the new rule to historical transactions
         try {
           const result = await applyRules.mutateAsync({ 
             rules: [newRule], 
             lookbackDays: 365 
           });
 
-          // Show final success message with counts
           toast(`Auto-tag rule created and applied to ${result.updatedCount} past transaction${result.updatedCount !== 1 ? 's' : ''}`, {
             position: "bottom-left",
             duration: 4000,
@@ -451,9 +426,7 @@ const Expenses = () => {
         });
       }
     } else {
-      // Handle unchecking - delete rule  
       try {
-        // Find the rule to delete based on match_text (description)
         const { data: existingRule, error: findError } = await supabase
           .from('transaction_categorization_rules')
           .select('id')
@@ -479,7 +452,6 @@ const Expenses = () => {
 
             if (deleteError) throw deleteError;
 
-            // Remove from our existing rules set
             setExistingRules(prev => {
               const newSet = new Set(prev);
               newSet.delete(transaction.description);
@@ -491,8 +463,6 @@ const Expenses = () => {
               duration: 3000,
             });
           } else {
-            // If user cancels, restore the checkbox to checked state
-            // Force re-check by manually updating the UI state
             checkExistingRules();
           }
         }
@@ -506,7 +476,6 @@ const Expenses = () => {
     }
   };
 
-  // Check for existing auto-categorization rules
   const checkExistingRules = async () => {
     if (!user?.id || !expenseTransactions?.length) return;
 
@@ -534,14 +503,12 @@ const Expenses = () => {
     checkExistingRules();
   }, [user?.id, expenseTransactions]);
 
-  // Debug logging for business expenses summary
   useEffect(() => {
     if (businessExpensesData) {
-      console.log('🎯 UNFILTERED Business Expenses Data used in JSX:', {
+      console.log('🎯 UNFILTERED Business Expenses Data:', {
         totalAmount: businessExpensesData.total,
         categoryTotals: businessExpensesData.categoryTotals,
-        transactionCount: businessExpensesData.transactionCount,
-        verification: 'This data should NOT change when table filters are applied (search, uncategorized toggle, etc.)'
+        transactionCount: businessExpensesData.transactionCount
       });
     }
   }, [businessExpensesData]);
@@ -555,8 +522,6 @@ const Expenses = () => {
       </div>
     );
   }
-
-  // OLD FILTERED CALCULATIONS REMOVED - Now using unfiltered useBusinessExpensesTotal hook
 
   return (
     <div className="space-y-6">
@@ -586,7 +551,6 @@ const Expenses = () => {
         </div>
       </div>
 
-      {/* Expense Summary by Category */}
       <Card className="border-red-200">
         <CardHeader>
           <div className="flex items-center gap-2">
@@ -612,11 +576,8 @@ const Expenses = () => {
               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-red-600"></div>
             </div>
           ) : (() => {
-            // Use unfiltered business expenses data
             const categoryTotals = businessExpensesData?.categoryTotals || {};
             const totalAmount = businessExpensesData?.total || 0;
-            
-            // Sort categories by amount (highest first)
             const sortedCategories = Object.entries(categoryTotals).sort(([,a], [,b]) => b - a);
 
             return (
@@ -643,7 +604,6 @@ const Expenses = () => {
         </CardContent>
       </Card>
 
-      {/* Date Range and Filters */}
       <Card className="border-blue-200">
         <CardHeader>
           <CardTitle className="text-blue-900 flex items-center justify-between">
@@ -696,34 +656,29 @@ const Expenses = () => {
             </div>
           </div>
           
-          {/* Filter Controls */}
           <div className="space-y-4">
-            {/* Filter Dropdowns */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* Expense Type Filter */}
               <div className="space-y-2">
                 <label className="text-sm font-medium text-gray-700">Expense Type</label>
                 <Select
                   value={filterExpenseType}
                   onValueChange={(value) => {
                     setFilterExpenseType(value);
-                    // Reset dependent filters when expense type changes
                     setFilterCategory('');
                     setFilterSubcategory('');
                   }}
                 >
-                   <SelectTrigger className="min-w-[260px] border-blue-200 focus:border-blue-400 justify-between text-ellipsis whitespace-nowrap overflow-hidden">
+                  <SelectTrigger className="min-w-[260px] border-blue-200 focus:border-blue-400 justify-between text-ellipsis whitespace-nowrap overflow-hidden">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
                     <SelectItem value="business">Business</SelectItem>
                     <SelectItem value="personal">Personal</SelectItem>
-                     <SelectItem value="uncategorized" className="text-center">--</SelectItem>
+                    <SelectItem value="uncategorized" className="text-center">--</SelectItem>
                   </SelectContent>
                 </Select>
                 
-                {/* Show only uncategorized checkbox */}
                 <div className="flex items-center gap-2 mt-3 p-2 bg-amber-50 rounded-lg border border-amber-200">
                   <Checkbox
                     id="show-uncategorized"
@@ -740,24 +695,22 @@ const Expenses = () => {
                 </div>
               </div>
 
-              {/* Category Filter */}
               <div className="space-y-2">
                 <label className="text-sm font-medium text-gray-700">Category</label>
                 <Select
                   value={filterCategory}
                   onValueChange={(value) => {
                     setFilterCategory(value);
-                    // Reset subcategory when category changes
                     setFilterSubcategory('');
                   }}
                   disabled={isLoadingCategories}
                 >
-                   <SelectTrigger className="min-w-[260px] border-blue-200 focus:border-blue-400 justify-between text-ellipsis whitespace-nowrap overflow-hidden">
+                  <SelectTrigger className="min-w-[260px] border-blue-200 focus:border-blue-400 justify-between text-ellipsis whitespace-nowrap overflow-hidden">
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                     <SelectItem value="uncategorized" className="text-center">--</SelectItem>
+                    <SelectItem value="uncategorized" className="text-center">--</SelectItem>
                     {categories.map(category => (
                       <SelectItem key={category} value={category}>
                         {category}
@@ -767,7 +720,6 @@ const Expenses = () => {
                 </Select>
               </div>
 
-              {/* Subcategory Filter */}
               <div className="space-y-2">
                 <label className="text-sm font-medium text-gray-700">Subcategory</label>
                 <Select
@@ -790,7 +742,6 @@ const Expenses = () => {
                   </SelectContent>
                 </Select>
                 
-                {/* Clear All Filters Button */}
                 <div className="mt-3">
                   <Button
                     variant="outline"
@@ -807,13 +758,11 @@ const Expenses = () => {
         </CardContent>
       </Card>
 
-      {/* Transactions Table */}
       <Card className="border-blue-200">
         <CardHeader>
           <CardTitle className="text-blue-900">All Transactions ({selectedYear})</CardTitle>
         </CardHeader>
         <CardContent>
-          {/* Search Bar and Filters */}
           <div className="mb-4 space-y-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
@@ -827,8 +776,8 @@ const Expenses = () => {
             </div>
           </div>
           {expenseTransactions.length === 0 ? (
-             <div className="text-center py-8">
-               <p className="text-gray-500">No expense transactions found for {selectedYear}. Add some transactions to get started.</p>
+            <div className="text-center py-8">
+              <p className="text-gray-500">No expense transactions found for {selectedYear}. Add some transactions to get started.</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -839,8 +788,8 @@ const Expenses = () => {
                     <TableHead>Description</TableHead>
                     <TableHead>Amount</TableHead>
                     <TableHead>Expense Type</TableHead>
-                      <TableHead>Category</TableHead>
-                      <TableHead>Subcategory</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Subcategory</TableHead>
                     <TableHead>Receipt</TableHead>
                     <TableHead className="text-center">Auto Tag</TableHead>
                   </TableRow>
@@ -860,98 +809,83 @@ const Expenses = () => {
                       <TableCell>
                         <Select
                           value={transaction.expense_type || "uncategorized"}
-                           onValueChange={(value) => {
-                             const updates: any = { 
-                               expense_type: value === "uncategorized" ? null : value,
-                               expense_subcategory: null // Always reset subcategory when type changes
-                             };
-                             
-                             // Handle category based on expense type
-                             if (value === "personal") {
-                               // For personal expenses, set category to uncategorized
-                               updates.expense_category = null;
-                             } else if (value === "uncategorized") {
-                               // For uncategorized type, reset category too
-                               updates.expense_category = null;
-                             } else if (value === "internal_transfer") {
-                               // For internal transfer, set both category and subcategory to null
-                               updates.expense_category = null;
-                               updates.expense_subcategory = null;
-                             } else {
-                               // For business expenses, always reset category when switching from personal
-                               // This prevents validation errors when personal categories are invalid for business
-                               updates.expense_category = null;
-                             }
-                             
-                             handleUpdateTransaction(transaction.id, updates);
-                           }}
+                          onValueChange={(value) => {
+                            const updates: any = { 
+                              expense_type: value === "uncategorized" ? null : value,
+                              expense_subcategory: null
+                            };
+                            
+                            if (value === "personal" || value === "uncategorized" || value === "internal_transfer") {
+                              updates.expense_category = null;
+                            } else {
+                              updates.expense_category = null;
+                            }
+                            
+                            handleUpdateTransaction(transaction.id, updates);
+                          }}
                         >
                           <SelectTrigger className={`min-w-[260px] justify-between text-ellipsis whitespace-nowrap overflow-hidden ${!transaction.expense_type ? 'text-center' : ''}`}>
                             <SelectValue />
                           </SelectTrigger>
-                           <SelectContent>
-                              <SelectItem value="uncategorized" className="text-center">--</SelectItem>
-                             <SelectItem value="business">Business</SelectItem>
-                             <SelectItem value="personal">Personal</SelectItem>
-                             <SelectItem value="internal_transfer">Internal Transfer</SelectItem>
-                           </SelectContent>
+                          <SelectContent>
+                            <SelectItem value="uncategorized" className="text-center">--</SelectItem>
+                            <SelectItem value="business">Business</SelectItem>
+                            <SelectItem value="personal">Personal</SelectItem>
+                            <SelectItem value="internal_transfer">Internal Transfer</SelectItem>
+                          </SelectContent>
                         </Select>
                       </TableCell>
-                       <TableCell>
-                         {transaction.expense_type && (transaction.expense_type as any) !== 'internal_transfer' ? (
-                             <Select
-                               value={transaction.expense_category || "uncategorized"}
-                               onValueChange={(value) => {
-                                 // Special handling for categories that don't need subcategories
-                                 const updates: any = { 
-                                   expense_category: value === "uncategorized" ? null : value,
-                                   expense_subcategory: null // Always reset subcategory when category changes
-                                 };
-                                 
-                                 // For Parking category, ensure subcategory is explicitly null
-                                 if (value === "Parking") {
-                                   updates.expense_subcategory = null;
-                                 }
-                                 
-                                 handleUpdateTransaction(transaction.id, updates);
-                               }}
-                             >
-                                <SelectTrigger className={`min-w-[260px] justify-between text-ellipsis whitespace-nowrap overflow-hidden ${!transaction.expense_category ? 'text-center' : 'text-left pl-3'}`}>
-                                  <SelectValue placeholder="Select category" />
-                                </SelectTrigger>
-                                <SelectContent className="z-50 bg-white">
-                                   <SelectItem value="uncategorized" className="text-center">--</SelectItem>
-                                  {(transaction.expense_type === 'business' || transaction.expense_type === 'personal') && 
-                                   expenseCategories[transaction.expense_type]?.map(category => (
-                                    <SelectItem key={category} value={category}>
-                                      {category}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                             </Select>
-                         ) : (
-                           <span className="text-gray-400 pl-3">
-                             {(transaction.expense_type as any) === 'internal_transfer' 
-                               ? 'Not applicable for Internal Transfer'
-                               : 'Select expense type first'
-                             }
-                           </span>
-                         )}
-                       </TableCell>
-                         <TableCell>
-                           {(transaction.expense_type as any) === 'internal_transfer' ? (
-                             <span className="text-gray-400 pl-3">Not applicable for Internal Transfer</span>
-                           ) : (
-                             <ValidSubcategorySelector
-                               expenseType={transaction.expense_type as any}
-                               expenseCategory={transaction.expense_category as any}
-                               value={transaction.expense_subcategory as any}
-                               onValueChange={(value) => 
-                                 handleUpdateTransaction(transaction.id, { expense_subcategory: value }, transaction)
-                               }
-                             />
-                           )}
-                         </TableCell>
+                      <TableCell>
+                        {transaction.expense_type && (transaction.expense_type as any) !== 'internal_transfer' ? (
+                          <Select
+                            value={transaction.expense_category || "uncategorized"}
+                            onValueChange={(value) => {
+                              const updates: any = { 
+                                expense_category: value === "uncategorized" ? null : value,
+                                expense_subcategory: null
+                              };
+                              if (value === "Parking") {
+                                updates.expense_subcategory = null;
+                              }
+                              handleUpdateTransaction(transaction.id, updates);
+                            }}
+                          >
+                            <SelectTrigger className={`min-w-[260px] justify-between text-ellipsis whitespace-nowrap overflow-hidden ${!transaction.expense_category ? 'text-center' : 'text-left pl-3'}`}>
+                              <SelectValue placeholder="Select category" />
+                            </SelectTrigger>
+                            <SelectContent className="z-50 bg-white">
+                              <SelectItem value="uncategorized" className="text-center">--</SelectItem>
+                              {(transaction.expense_type === 'business' || transaction.expense_type === 'personal') && 
+                               expenseCategories[transaction.expense_type]?.map(category => (
+                                <SelectItem key={category} value={category}>
+                                  {category}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="text-gray-400 pl-3">
+                            {(transaction.expense_type as any) === 'internal_transfer' 
+                              ? 'Not applicable for Internal Transfer'
+                              : 'Select expense type first'
+                            }
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {(transaction.expense_type as any) === 'internal_transfer' ? (
+                          <span className="text-gray-400 pl-3">Not applicable for Internal Transfer</span>
+                        ) : (
+                          <ValidSubcategorySelector
+                            expenseType={transaction.expense_type as any}
+                            expenseCategory={transaction.expense_category as any}
+                            value={transaction.expense_subcategory as any}
+                            onValueChange={(value) => 
+                              handleUpdateTransaction(transaction.id, { expense_subcategory: value }, transaction)
+                            }
+                          />
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Input
@@ -992,33 +926,33 @@ const Expenses = () => {
                           )}
                         </div>
                       </TableCell>
-                        <TableCell className="text-center">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div className={`inline-flex items-center space-x-2 transition-all duration-200 ${
-                                  !transaction.expense_category || !transaction.expense_subcategory 
-                                    ? 'opacity-40 cursor-not-allowed' 
-                                    : 'opacity-100 cursor-pointer hover:bg-blue-50 rounded-md px-2 py-1'
-                                }`}>
-                                  <Checkbox 
-                                    checked={existingRules.has(transaction.description || '')}
-                                    disabled={!transaction.expense_category || !transaction.expense_subcategory}
-                                    onCheckedChange={(checked) => handleAutoTagChange(transaction.id, checked as boolean, transaction)}
-                                    className={`transition-all duration-200 ${
-                                      !transaction.expense_category || !transaction.expense_subcategory
-                                        ? 'border-gray-300 cursor-not-allowed'
-                                        : 'border-blue-400 hover:border-blue-500 cursor-pointer'
-                                    }`}
-                                  />
-                                </div>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>Automatically tag similar transactions — uncheck to remove rule</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </TableCell>
+                      <TableCell className="text-center">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div className={`inline-flex items-center space-x-2 transition-all duration-200 ${
+                                !transaction.expense_category || !transaction.expense_subcategory 
+                                  ? 'opacity-40 cursor-not-allowed' 
+                                  : 'opacity-100 cursor-pointer hover:bg-blue-50 rounded-md px-2 py-1'
+                              }`}>
+                                <Checkbox 
+                                  checked={existingRules.has(transaction.description || '')}
+                                  disabled={!transaction.expense_category || !transaction.expense_subcategory}
+                                  onCheckedChange={(checked) => handleAutoTagChange(transaction.id, checked as boolean, transaction)}
+                                  className={`transition-all duration-200 ${
+                                    !transaction.expense_category || !transaction.expense_subcategory
+                                      ? 'border-gray-300 cursor-not-allowed'
+                                      : 'border-blue-400 hover:border-blue-500 cursor-pointer'
+                                  }`}
+                                />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>Automatically tag similar transactions — uncheck to remove rule</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
