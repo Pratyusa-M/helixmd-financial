@@ -22,6 +22,7 @@ import { useBusinessExpensesTotal } from "@/hooks/useBusinessExpensesTotal";
 import { useExpenseFilterOptions } from "@/hooks/useExpenseFilterOptions";
 import { useCategorization } from "@/hooks/useCategorization";
 import { useRuleApplication } from "@/hooks/useRuleApplication";
+import { ValidSubcategorySelector } from "@/components/ValidSubcategorySelector";
 import { supabase } from "@/integrations/supabase/client";
 
 // Helper function to highlight search matches in text
@@ -40,6 +41,71 @@ const highlightText = (text: string, searchQuery: string) => {
   );
 };
 
+// 3-level classification system
+const expenseCategories = {
+  business: [
+    "CME",
+    "Fees & Insurance", 
+    "Office Expenses or Supplies",
+    "Auto Expense",
+    "Parking"
+  ],
+  personal: [
+    "Shared Business",
+    "Personal"
+  ]
+};
+
+const subcategories = {
+  "CME": [
+    "Books, Subscriptions, Journals",
+    "Professional Development/CME",
+    "Travel & Conference",
+    "Meals & Entertainment"
+  ],
+  "Fees & Insurance": [
+    "CMPA Insurance",
+    "Insurance - Prof Overhead Expense",
+    "Professional Association Fees",
+    "Private Health Plan Premiums",
+    "Accounting & Legal",
+    "Bank Fees or Interest",
+    "Insurance - Home Office"
+  ],
+  "Office Expenses or Supplies": [
+    "Capital Assets (Computer, Desk etc)",
+    "Office Supplies",
+    "Salary to Secretary",
+    "Shared Overhead",
+    "Patient Medical/Drug Supplies",
+    "Gifts for Staff/Colleagues",
+    "Office - Telecom",
+    "Office - Internet",
+    "Meals & Entertainment",
+    "Insurance - Office"
+  ],
+  "Auto Expense": [
+    "Gas",
+    "Repairs",
+    "Insurance",
+    "Licensing Fees",
+    "Finance/Lease Payment"
+  ],
+  "Parking": [],
+  "Shared Business": [
+    "Rent/Mortgage",
+    "Hydro",
+    "Gas",
+    "Hot Water Heater",
+    "Property Tax",
+    "Water",
+    "Home Insurance",
+    "Cleaning Service",
+    "Other"
+  ],
+  "Personal": []
+};
+
 const Expenses = () => {
   const { user } = useAuth();
   const { transactions, isLoading, updateTransaction } = useTransactions();
@@ -56,51 +122,10 @@ const Expenses = () => {
   const [startDate, setStartDate] = useState(fiscalStartDate);
   const [endDate, setEndDate] = useState(fiscalEndDate);
   const [existingRules, setExistingRules] = useState<Set<string>>(new Set());
-  const [categoriesByType, setCategoriesByType] = useState<Record<string, string[]>>({});
-  const [subcategoriesByCategory, setSubcategoriesByCategory] = useState<Record<string, string[]>>({});
   
   const { data: businessExpensesData, isLoading: isLoadingBusinessTotal } = useBusinessExpensesTotal();
-  const { categories, subcategoriesByCategory: filterSubcategoriesByCategory, isLoadingCategories } = useExpenseFilterOptions();
+  const { categories, subcategoriesByCategory, isLoadingCategories } = useExpenseFilterOptions();
   const { taxSettings } = useTaxSettings();
-
-  // Fetch categories and subcategories from DB
-  useEffect(() => {
-    async function fetchExpenseOptions() {
-      try {
-        const { data: typesData, error: typesError } = await supabase.from('expense_types').select('id, name');
-        if (typesError) throw typesError;
-
-        const { data: catsData, error: catsError } = await supabase.from('expense_categories').select('id, name, expense_type_id');
-        if (catsError) throw catsError;
-
-        const { data: subcatsData, error: subcatsError } = await supabase.from('expense_subcategories').select('id, name, expense_category_id');
-        if (subcatsError) throw subcatsError;
-
-        // Build categoriesByType
-        const catsByType: Record<string, string[]> = {};
-        typesData.forEach(type => {
-          const typeCats = catsData.filter(cat => cat.expense_type_id === type.id).map(cat => cat.name);
-          catsByType[type.name] = typeCats;
-        });
-
-        // Build subcategoriesByCategory
-        const subcatsByCat: Record<string, string[]> = {};
-        catsData.forEach(cat => {
-          const catSubcats = subcatsData.filter(sub => sub.expense_category_id === cat.id).map(sub => sub.name);
-          subcatsByCat[cat.name] = catSubcats;
-        });
-
-        setCategoriesByType(catsByType);
-        setSubcategoriesByCategory(subcatsByCat);
-      } catch (error) {
-        console.error('Error fetching expense options:', error);
-        toast("Failed to load expense categories and subcategories.", {
-          variant: "destructive",
-        });
-      }
-    }
-    fetchExpenseOptions();
-  }, []);
 
   // Debug logging
   useEffect(() => {
@@ -709,7 +734,7 @@ const Expenses = () => {
                     <SelectItem value="all">All</SelectItem>
                     <SelectItem value="uncategorized" className="text-center">--</SelectItem>
                     {filterCategory !== 'all' && filterCategory !== 'uncategorized' && 
-                     filterSubcategoriesByCategory[filterCategory]?.map(subcategory => (
+                     subcategoriesByCategory[filterCategory]?.map(subcategory => (
                       <SelectItem key={subcategory} value={subcategory}>
                         {subcategory}
                       </SelectItem>
@@ -811,7 +836,7 @@ const Expenses = () => {
                         </Select>
                       </TableCell>
                       <TableCell>
-                        {transaction.expense_type && transaction.expense_type !== 'internal_transfer' ? (
+                        {transaction.expense_type && (transaction.expense_type as any) !== 'internal_transfer' ? (
                           <Select
                             value={transaction.expense_category || "uncategorized"}
                             onValueChange={(value) => {
@@ -830,7 +855,8 @@ const Expenses = () => {
                             </SelectTrigger>
                             <SelectContent className="z-50 bg-white">
                               <SelectItem value="uncategorized" className="text-center">--</SelectItem>
-                              {categoriesByType[transaction.expense_type]?.map(category => (
+                              {(transaction.expense_type === 'business' || transaction.expense_type === 'personal') && 
+                               expenseCategories[transaction.expense_type]?.map(category => (
                                 <SelectItem key={category} value={category}>
                                   {category}
                                 </SelectItem>
@@ -839,7 +865,7 @@ const Expenses = () => {
                           </Select>
                         ) : (
                           <span className="text-gray-400 pl-3">
-                            {transaction.expense_type === 'internal_transfer' 
+                            {(transaction.expense_type as any) === 'internal_transfer' 
                               ? 'Not applicable for Internal Transfer'
                               : 'Select expense type first'
                             }
@@ -847,28 +873,17 @@ const Expenses = () => {
                         )}
                       </TableCell>
                       <TableCell>
-                        {transaction.expense_type === 'internal_transfer' ? (
+                        {(transaction.expense_type as any) === 'internal_transfer' ? (
                           <span className="text-gray-400 pl-3">Not applicable for Internal Transfer</span>
                         ) : (
-                          <Select
-                            value={transaction.expense_subcategory || "uncategorized"}
+                          <ValidSubcategorySelector
+                            expenseType={transaction.expense_type as any}
+                            expenseCategory={transaction.expense_category as any}
+                            value={transaction.expense_subcategory as any}
                             onValueChange={(value) => 
-                              handleUpdateTransaction(transaction.id, { expense_subcategory: value === "uncategorized" ? null : value }, transaction)
+                              handleUpdateTransaction(transaction.id, { expense_subcategory: value }, transaction)
                             }
-                            disabled={!transaction.expense_category || transaction.expense_category === "uncategorized"}
-                          >
-                            <SelectTrigger className={`min-w-[260px] justify-between text-ellipsis whitespace-nowrap overflow-hidden ${!transaction.expense_subcategory ? 'text-center' : 'text-left pl-3'}`}>
-                              <SelectValue placeholder="Select subcategory" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="uncategorized" className="text-center">--</SelectItem>
-                              {subcategoriesByCategory[transaction.expense_category]?.map(subcategory => (
-                                <SelectItem key={subcategory} value={subcategory}>
-                                  {subcategory}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          />
                         )}
                       </TableCell>
                       <TableCell>
