@@ -58,12 +58,14 @@ const Expenses = () => {
   const [existingRules, setExistingRules] = useState<Set<string>>(new Set());
   const [categoriesByType, setCategoriesByType] = useState<Record<string, string[]>>({});
   const [subcategoriesByCategory, setSubcategoriesByCategory] = useState<Record<string, string[]>>({});
+  const [filterCategories, setFilterCategories] = useState<string[]>([]);
+  const [filterSubcategories, setFilterSubcategories] = useState<string[]>([]);
   
   const { data: businessExpensesData, isLoading: isLoadingBusinessTotal } = useBusinessExpensesTotal();
   const { categories, subcategoriesByCategory: filterSubcategoriesByCategory, isLoadingCategories } = useExpenseFilterOptions();
   const { taxSettings } = useTaxSettings();
 
-  // Fetch categories and subcategories from DB
+  // Fetch categories and subcategories from DB for transaction table
   useEffect(() => {
     async function fetchExpenseOptions() {
       try {
@@ -101,6 +103,38 @@ const Expenses = () => {
     }
     fetchExpenseOptions();
   }, []);
+
+  // Fetch categories for a given expense type for filters
+  const fetchCategoriesForType = async (expenseType: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('expense_categories')
+        .select('name')
+        .eq('expense_type_id', (await supabase.from('expense_types').select('id').eq('name', expenseType).single()).data?.id);
+      if (error) throw error;
+      setFilterCategories(data.map((item) => item.name) || []);
+    } catch (error) {
+      console.error('Error fetching categories:', error);
+      toast("Failed to load categories.", { variant: "destructive" });
+      setFilterCategories([]);
+    }
+  };
+
+  // Fetch subcategories for a given category for filters
+  const fetchSubcategoriesForCategory = async (categoryName: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('expense_subcategories')
+        .select('name')
+        .eq('expense_category_id', (await supabase.from('expense_categories').select('id').eq('name', categoryName).single()).data?.id);
+      if (error) throw error;
+      setFilterSubcategories(data.map((item) => item.name) || []);
+    } catch (error) {
+      console.error('Error fetching subcategories:', error);
+      toast("Failed to load subcategories.", { variant: "destructive" });
+      setFilterSubcategories([]);
+    }
+  };
 
   // Debug logging
   useEffect(() => {
@@ -641,6 +675,10 @@ const Expenses = () => {
                     setFilterExpenseType(value);
                     setFilterCategory('');
                     setFilterSubcategory('');
+                    // Fetch categories for the selected type
+                    if (value !== 'all' && value !== 'uncategorized') {
+                      fetchCategoriesForType(value);
+                    }
                   }}
                 >
                   <SelectTrigger className="min-w-[260px] border-blue-200 focus:border-blue-400 justify-between text-ellipsis whitespace-nowrap overflow-hidden">
@@ -677,8 +715,12 @@ const Expenses = () => {
                   onValueChange={(value) => {
                     setFilterCategory(value);
                     setFilterSubcategory('');
+                    // Fetch subcategories for the selected category
+                    if (value !== 'all' && value !== 'uncategorized') {
+                      fetchSubcategoriesForCategory(value);
+                    }
                   }}
-                  disabled={isLoadingCategories}
+                  disabled={filterExpenseType === 'all' || filterExpenseType === 'uncategorized' || !filterExpenseType || filterCategories.length === 0}
                 >
                   <SelectTrigger className="min-w-[260px] border-blue-200 focus:border-blue-400 justify-between text-ellipsis whitespace-nowrap overflow-hidden">
                     <SelectValue placeholder="Select category" />
@@ -686,7 +728,7 @@ const Expenses = () => {
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
                     <SelectItem value="uncategorized" className="text-center">--</SelectItem>
-                    {categories.map(category => (
+                    {filterCategories.map(category => (
                       <SelectItem key={category} value={category}>
                         {category}
                       </SelectItem>
@@ -700,7 +742,7 @@ const Expenses = () => {
                 <Select
                   value={filterSubcategory}
                   onValueChange={setFilterSubcategory}
-                  disabled={filterCategory === '' || filterCategory === 'all' || filterCategory === 'uncategorized'}
+                  disabled={filterCategory === '' || filterCategory === 'all' || filterCategory === 'uncategorized' || filterSubcategories.length === 0}
                 >
                   <SelectTrigger className="min-w-[260px] border-blue-200 focus:border-blue-400 justify-between text-ellipsis whitespace-nowrap overflow-hidden">
                     <SelectValue placeholder="Select subcategory" />
@@ -708,8 +750,7 @@ const Expenses = () => {
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
                     <SelectItem value="uncategorized" className="text-center">--</SelectItem>
-                    {filterCategory !== 'all' && filterCategory !== 'uncategorized' && 
-                     filterSubcategoriesByCategory[filterCategory]?.map(subcategory => (
+                    {filterSubcategories.map(subcategory => (
                       <SelectItem key={subcategory} value={subcategory}>
                         {subcategory}
                       </SelectItem>
